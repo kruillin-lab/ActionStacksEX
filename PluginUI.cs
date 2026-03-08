@@ -1,0 +1,854 @@
+using System;
+using System.Linq;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
+using Dalamud.Interface.Utility;
+using FFXIVClientStructs.FFXIV.Client.UI.Misc;
+using Hypostasis.Game.Structures;
+using Lumina.Excel.Sheets;
+using Action = Lumina.Excel.Sheets.Action;
+
+namespace ActionStacksEX;
+
+public static class PluginUI
+{
+    private static bool isVisible = false;
+    private static int selectedStack = -1;
+    private static int hotbar = 0;
+    private static int hotbarSlot = 0;
+    private static int commandType = 1;
+    private static uint commandID = 0;
+
+    public static bool IsVisible
+    {
+        get => isVisible;
+        set => isVisible = value;
+    }
+
+    private static Configuration.ActionStack CurrentStack => 0 <= selectedStack && selectedStack < ActionStacksEX.Config.ActionStacks.Count ? ActionStacksEX.Config.ActionStacks[selectedStack] : null;
+
+    public static void Draw()
+    {
+        if (!isVisible) return;
+
+        ImGui.SetNextWindowSizeConstraints(new Vector2(700, 600) * ImGuiHelpers.GlobalScale, new Vector2(9999));
+        ImGui.Begin("ActionStacksEX Configuration", ref isVisible);
+        ImGuiEx.AddDonationHeader();
+
+        if (ImGui.BeginTabBar("ActionStacksEXTabs"))
+        {
+            if (ImGui.BeginTabItem("Stacks"))
+            {
+                DrawStackList();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Other Settings"))
+            {
+                ImGui.BeginChild("OtherSettings");
+                DrawOtherSettings();
+                ImGui.EndChild();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Custom Placeholders"))
+            {
+                DrawCustomPlaceholders();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Help"))
+            {
+                DrawStackHelp();
+                ImGui.EndTabItem();
+            }
+
+            ImGui.EndTabBar();
+        }
+
+        ImGui.End();
+    }
+
+    private static void DrawStackList()
+    {
+        var currentStack = CurrentStack;
+        var hasSelectedStack = currentStack != null;
+
+        ImGui.PushFont(UiBuilder.IconFont);
+
+        var buttonSize = ImGui.CalcTextSize(FontAwesomeIcon.SignOutAlt.ToIconString()) + ImGui.GetStyle().FramePadding * 2;
+
+        if (ImGui.Button(FontAwesomeIcon.Plus.ToIconString(), buttonSize))
+        {
+            ActionStacksEX.Config.ActionStacks.Add(new() { Name = "New Stack" });
+            ActionStacksEX.Config.Save();
+        }
+
+        ImGui.SameLine();
+
+        if (ImGui.Button(FontAwesomeIcon.SignOutAlt.ToIconString(), buttonSize) && hasSelectedStack)
+            ImGui.SetClipboardText(Configuration.ExportActionStack(CurrentStack));
+        ImGui.PopFont();
+        ImGuiEx.SetItemTooltip("Export stack to clipboard.");
+        ImGui.PushFont(UiBuilder.IconFont);
+
+        ImGui.SameLine();
+
+        if (ImGui.Button(FontAwesomeIcon.SignInAlt.ToIconString(), buttonSize))
+        {
+            try
+            {
+                var stack = Configuration.ImportActionStack(ImGui.GetClipboardText());
+                ActionStacksEX.Config.ActionStacks.Add(stack);
+                ActionStacksEX.Config.Save();
+            }
+            catch (Exception e)
+            {
+                DalamudApi.PrintError($"Failed to import stack from clipboard!\n{e.Message}");
+            }
+        }
+        ImGui.PopFont();
+        ImGuiEx.SetItemTooltip("Import stack from clipboard.");
+        ImGui.PushFont(UiBuilder.IconFont);
+
+        ImGui.SameLine();
+
+        if (ImGui.Button(FontAwesomeIcon.ArrowUp.ToIconString(), buttonSize) && hasSelectedStack)
+        {
+            var preset = CurrentStack;
+            ActionStacksEX.Config.ActionStacks.RemoveAt(selectedStack);
+
+            selectedStack = Math.Max(selectedStack - 1, 0);
+
+            ActionStacksEX.Config.ActionStacks.Insert(selectedStack, preset);
+            ActionStacksEX.Config.Save();
+        }
+
+        ImGui.SameLine();
+
+        if (ImGui.Button(FontAwesomeIcon.ArrowDown.ToIconString(), buttonSize) && hasSelectedStack)
+        {
+            var preset = CurrentStack;
+            ActionStacksEX.Config.ActionStacks.RemoveAt(selectedStack);
+
+            selectedStack = Math.Min(selectedStack + 1, ActionStacksEX.Config.ActionStacks.Count);
+
+            ActionStacksEX.Config.ActionStacks.Insert(selectedStack, preset);
+            ActionStacksEX.Config.Save();
+        }
+
+        ImGui.PopFont();
+
+        ImGui.SameLine();
+
+        if (ImGuiEx.DeleteConfirmationButton(buttonSize) && hasSelectedStack)
+        {
+            ActionStacksEX.Config.ActionStacks.RemoveAt(selectedStack);
+            selectedStack = Math.Min(selectedStack, ActionStacksEX.Config.ActionStacks.Count - 1);
+            currentStack = CurrentStack;
+            hasSelectedStack = currentStack != null;
+            ActionStacksEX.Config.Save();
+        }
+
+        var firstColumnWidth = 250 * ImGuiHelpers.GlobalScale;
+        ImGui.PushStyleColor(ImGuiCol.Border, ImGui.GetColorU32(ImGuiCol.TabActive));
+        ImGui.BeginChild("ActionStacksEXPresetList", new Vector2(firstColumnWidth, ImGui.GetContentRegionAvail().Y / 2), true);
+        ImGui.PopStyleColor();
+
+        for (int i = 0; i < ActionStacksEX.Config.ActionStacks.Count; i++)
+        {
+            ImGui.PushID(i);
+
+            var preset = ActionStacksEX.Config.ActionStacks[i];
+
+            if (ImGui.Selectable(preset.Name, selectedStack == i))
+                selectedStack = i;
+
+            ImGui.PopID();
+        }
+
+        ImGui.EndChild();
+
+        if (!hasSelectedStack) return;
+
+        var lastCursorPos = ImGui.GetCursorPos();
+        ImGui.SameLine();
+        var nextLineCursorPos = ImGui.GetCursorPos();
+        ImGui.SetCursorPos(lastCursorPos);
+
+        ImGui.BeginChild("ActionStacksEXStackEditorMain", new Vector2(firstColumnWidth, ImGui.GetContentRegionAvail().Y), true);
+        DrawStackEditorMain(currentStack);
+        ImGui.EndChild();
+
+        ImGui.SetCursorPos(nextLineCursorPos);
+        ImGui.BeginChild("ActionStacksEXStackEditorLists", ImGui.GetContentRegionAvail(), false);
+        DrawStackEditorLists(currentStack);
+        ImGui.EndChild();
+    }
+
+    private static void DrawStackEditorMain(Configuration.ActionStack stack)
+    {
+        var save = false;
+
+        save |= ImGui.InputText("Name", ref stack.Name, 64);
+        save |= ImGui.CheckboxFlags("##Shift", ref stack.ModifierKeys, 1u);
+        ImGuiEx.SetItemTooltip("Shift");
+        ImGui.SameLine();
+        save |= ImGui.CheckboxFlags("##Ctrl", ref stack.ModifierKeys, 2u);
+        ImGuiEx.SetItemTooltip("Control");
+        ImGui.SameLine();
+        save |= ImGui.CheckboxFlags("##Alt", ref stack.ModifierKeys, 4u);
+        ImGuiEx.SetItemTooltip("Alt");
+        ImGui.SameLine();
+        save |= ImGui.CheckboxFlags("##Exact", ref stack.ModifierKeys, 8u);
+        ImGuiEx.SetItemTooltip("Match exactly these modifiers. E.g. Shift + Control ticked will match Shift + Control held, but not Shift + Control + Alt held.");
+        ImGui.SameLine();
+        ImGui.TextUnformatted("Modifier Keys");
+        save |= ImGui.Checkbox("Block Original on Stack Fail", ref stack.BlockOriginal);
+        save |= ImGui.Checkbox("Fail if Out of Range", ref stack.CheckRange);
+        save |= ImGui.Checkbox("Fail if On Cooldown", ref stack.CheckCooldown);
+        ImGuiEx.SetItemTooltip("Will fail if the action would fail to queue due to cooldown. Which is either" +
+            "\n> 0.5s left on the cooldown, or < 0.5s since the last use (Charges / GCD).");
+
+        if (save)
+            ActionStacksEX.Config.Save();
+    }
+
+    private static void DrawStackEditorLists(Configuration.ActionStack stack)
+    {
+        DrawActionEditor(stack);
+        DrawItemEditor(stack);
+    }
+
+    private static string FormatActionRow(Action a) => a.RowId switch
+    {
+        0 => "All Actions",
+        1 => "All Harmful Actions",
+        2 => "All Beneficial Actions",
+        _ => $"[#{a.RowId} {a.ClassJob.ValueNullable?.Abbreviation}{(a.IsPvP ? " PVP" : string.Empty)}] {a.Name}"
+    };
+
+    private static readonly ImGuiEx.ExcelSheetComboOptions<Action> actionComboOptions = new()
+    {
+        FormatRow = FormatActionRow,
+        FilteredSheet = DalamudApi.DataManager.GetExcelSheet<Action>()?.Take(3).Concat(ActionStacksEX.actionSheet.Select(kv => kv.Value))
+    };
+
+    private static readonly ImGuiEx.ExcelSheetPopupOptions<Action> actionPopupOptions = new()
+    {
+        FormatRow = FormatActionRow,
+        FilteredSheet = actionComboOptions.FilteredSheet
+    };
+
+    private static readonly ImGuiEx.ExcelSheetComboOptions<Status> statusComboOptions = new()
+    {
+        FormatRow = r => $"[#{r.RowId}] {r.Name}",
+        FilteredSheet = ActionStacksEX.statusSheet.Select(kv => kv.Value)
+    };
+
+    private static void DrawActionEditor(Configuration.ActionStack stack)
+    {
+        var contentRegion = ImGui.GetContentRegionAvail();
+        ImGui.BeginChild("ActionStacksEXActionEditor", contentRegion with { Y = contentRegion.Y / 2 }, true);
+
+        var buttonWidth = ImGui.GetContentRegionAvail().X / 2;
+        var buttonIndent = 0f;
+        for (int i = 0; i < stack.Actions.Count; i++)
+        {
+            using var _ = ImGuiEx.IDBlock.Begin(i);
+            var action = stack.Actions[i];
+
+            ImGui.Button("≡");
+            if (ImGuiEx.IsItemDraggedDelta(action, ImGuiMouseButton.Left, ImGui.GetFrameHeightWithSpacing(), false, out var dt) && dt.Y != 0)
+                stack.Actions.Shift(i, dt.Y);
+
+            if (i == 0)
+                buttonIndent = ImGui.GetItemRectSize().X + ImGui.GetStyle().ItemSpacing.X;
+
+            ImGui.SameLine();
+
+            ImGui.SetNextItemWidth(buttonWidth);
+            if (ImGuiEx.ExcelSheetCombo("##Action", ref action.ID, actionComboOptions))
+                ActionStacksEX.Config.Save();
+
+            ImGui.SameLine();
+
+            if (ImGui.Checkbox("Adjust ID", ref action.UseAdjustedID))
+                ActionStacksEX.Config.Save();
+            var detectedAdjustment = false;
+            unsafe
+            {
+                if (!action.UseAdjustedID && (detectedAdjustment = Common.ActionManager->CS.GetAdjustedActionId(action.ID) != action.ID))
+                    ImGui.GetWindowDrawList().AddRectFilled(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), 0x2000FF30, ImGui.GetStyle().FrameRounding);
+            }
+            ImGuiEx.SetItemTooltip("Allows the action to match any other action that it transforms into."
+                +"\nE.g. Aero will match Dia, Play will match all cards, Diagnosis will match Eukrasian Diagnosis, etc."
+                +"\nEnable this for skills that upgrade. Disable this for compatibility with certain XIVCombos."
+                + (detectedAdjustment ? "\n\nThis action is currently adjusted due to a trait, combo or plugin. This option is recommended." : string.Empty));
+
+            ImGui.SameLine();
+
+            if (!ImGuiEx.DeleteConfirmationButton()) continue;
+            stack.Actions.RemoveAt(i);
+            ActionStacksEX.Config.Save();
+        }
+
+        using (ImGuiEx.IndentBlock.Begin(buttonIndent))
+        {
+            ImGuiEx.FontButton(FontAwesomeIcon.Plus.ToIconString(), UiBuilder.IconFont, new Vector2(buttonWidth, 0));
+            if (ImGuiEx.ExcelSheetPopup("ActionStacksEXAddSkillsPopup", out var row, actionPopupOptions))
+            {
+                stack.Actions.Add(new() { ID = row });
+                ActionStacksEX.Config.Save();
+            }
+        }
+
+        ImGui.EndChild();
+    }
+
+    private static string FormatOverrideActionRow(Action a) => a.RowId switch
+    {
+        0 => "Same Action",
+        _ => $"[#{a.RowId} {a.ClassJob.ValueNullable?.Abbreviation}{(a.IsPvP ? " PVP" : string.Empty)}] {a.Name}"
+    };
+
+    private static readonly ImGuiEx.ExcelSheetComboOptions<Action> actionOverrideComboOptions = new()
+    {
+        FormatRow = FormatOverrideActionRow,
+        FilteredSheet = DalamudApi.DataManager.GetExcelSheet<Action>().Take(1).Concat(ActionStacksEX.actionSheet.Select(kv => kv.Value))
+    };
+
+    private static void DrawItemEditor(Configuration.ActionStack stack)
+    {
+        ImGui.BeginChild("ActionStacksEXItemEditor", ImGui.GetContentRegionAvail(), true);
+
+        var buttonWidth = ImGui.GetContentRegionAvail().X / 4;
+        var buttonIndent = 0f;
+        for (int i = 0; i < stack.Items.Count; i++)
+        {
+            using var _ = ImGuiEx.IDBlock.Begin(i);
+            var item = stack.Items[i];
+
+            ImGui.Button("≡");
+            if (ImGuiEx.IsItemDraggedDelta(item, ImGuiMouseButton.Left, ImGui.GetFrameHeightWithSpacing(), false, out var dt) && dt.Y != 0)
+                stack.Items.Shift(i, dt.Y);
+
+            if (i == 0)
+                buttonIndent = ImGui.GetItemRectSize().X + ImGui.GetStyle().ItemSpacing.X;
+
+            ImGui.SameLine();
+
+            if (ImGui.Checkbox("##Enabled", ref item.Enabled))
+                ActionStacksEX.Config.Save();
+            ImGuiEx.SetItemTooltip("Enable or disable this stack item.");
+
+            ImGui.SameLine();
+
+            ImGui.SetNextItemWidth(buttonWidth);
+            if (DrawTargetTypeCombo("##TargetType", ref item.TargetID))
+                ActionStacksEX.Config.Save();
+
+            ImGui.SameLine();
+
+            ImGui.SetNextItemWidth(buttonWidth);
+            if (ImGuiEx.ExcelSheetCombo("##ActionOverride", ref item.ID, actionOverrideComboOptions))
+                ActionStacksEX.Config.Save();
+
+            ImGui.SameLine();
+
+            ImGui.SetNextItemWidth(buttonWidth / 2);
+            if (ImGui.SliderFloat("##HpRatio", ref item.HpRatio, 0.0f, 1.0f, "%.2f"))
+                ActionStacksEX.Config.Save();
+            ImGuiEx.SetItemTooltip("HP Ratio threshold. Item will be skipped if target HP% is above this.");
+
+            ImGui.SameLine();
+
+            ImGui.SetNextItemWidth(buttonWidth / 2);
+            if (ImGuiEx.ExcelSheetCombo("##StatusID", ref item.StatusID, statusComboOptions))
+                ActionStacksEX.Config.Save();
+            ImGuiEx.SetItemTooltip("Status ID check. Set to 0 to disable.");
+
+            ImGui.SameLine();
+
+            if (ImGui.Checkbox("##MissingStatus", ref item.MissingStatus))
+                ActionStacksEX.Config.Save();
+            ImGuiEx.SetItemTooltip("If checked, item will only trigger if the target is MISSING the status.");
+
+            ImGui.SameLine();
+
+            if (!ImGuiEx.DeleteConfirmationButton()) continue;
+            stack.Items.RemoveAt(i);
+            ActionStacksEX.Config.Save();
+        }
+
+        using (ImGuiEx.IndentBlock.Begin(buttonIndent))
+        {
+            if (ImGuiEx.FontButton(FontAwesomeIcon.Plus.ToIconString(), UiBuilder.IconFont, new Vector2(buttonWidth, 0)))
+            {
+                stack.Items.Add(new());
+                ActionStacksEX.Config.Save();
+            }
+        }
+
+        ImGui.EndChild();
+    }
+
+    private static bool DrawTargetTypeCombo(string label, ref uint currentSelection)
+    {
+        if (!ImGui.BeginCombo(label, PronounManager.GetPronounName(currentSelection))) return false;
+
+        var ret = false;
+        foreach (var id in PronounManager.OrderedIDs)
+        {
+            if (!ImGui.Selectable(PronounManager.GetPronounName(id), id == currentSelection)) continue;
+            currentSelection = id;
+            ret = true;
+            break;
+        }
+
+        ImGui.EndCombo();
+        return ret;
+    }
+
+    private static void DrawOtherSettings()
+    {
+        var save = false;
+
+        if (ImGuiEx.BeginGroupBox("Actions", 0.5f))
+        {
+            save |= ImGui.Checkbox("Enable Turbo Hotbar Keybinds", ref ActionStacksEX.Config.EnableTurboHotbars);
+            ImGuiEx.SetItemTooltip("Allows you to hold hotbar keybinds (no controller support).\nWARNING: Text macros may be spammed.");
+
+            using (ImGuiEx.DisabledBlock.Begin(!ActionStacksEX.Config.EnableTurboHotbars))
+            {
+                ImGuiEx.Prefix(false);
+                save |= ImGui.DragInt("Interval", ref ActionStacksEX.Config.TurboHotbarInterval, 0.5f, 0, 1000, "%d ms");
+
+                ImGuiEx.Prefix(false);
+                save |= ImGui.DragInt("Start Delay", ref ActionStacksEX.Config.InitialTurboHotbarInterval, 0.5f, 0, 1000, "%d ms");
+
+                ImGuiEx.Prefix(false);
+                save |= ImGui.Checkbox("Enable Out of Combat##Turbo", ref ActionStacksEX.Config.EnableTurboHotbarsOutOfCombat);
+
+                ImGuiEx.Prefix(true);
+                save |= ImGui.Checkbox($"Toggle Hold Mode", ref ActionStacksEX.Config.ToggleTurboMode);
+            }
+
+            save |= ImGui.Checkbox("Enable Instant Ground Targets", ref ActionStacksEX.Config.EnableInstantGroundTarget);
+            ImGuiEx.SetItemTooltip("Ground targets will immediately place themselves at your current cursor position when a stack does not override the target.");
+
+            using (ImGuiEx.DisabledBlock.Begin(!ActionStacksEX.Config.EnableInstantGroundTarget))
+            {
+                ImGuiEx.Prefix(true);
+                save |= ImGui.Checkbox("Block Miscellaneous Ground Targets", ref ActionStacksEX.Config.EnableBlockMiscInstantGroundTargets);
+                ImGuiEx.SetItemTooltip("Disables the previous option from activating on actions such as placing pets.");
+            }
+
+            save |= ImGui.Checkbox("Enable Enhanced Auto Face Target", ref ActionStacksEX.Config.EnableEnhancedAutoFaceTarget);
+            ImGuiEx.SetItemTooltip("Actions that don't require facing a target will no longer automatically face the target, such as healing.");
+
+            save |= ImGui.Checkbox("Enable Camera Relative Directional Actions", ref ActionStacksEX.Config.EnableCameraRelativeDirectionals);
+            ImGuiEx.SetItemTooltip("Changes channeled and directional actions, such as Passage of Arms or Surpanakha,\nto be relative to the direction your camera is facing, rather than your character.");
+
+            save |= ImGui.Checkbox("Enable Camera Relative Dashes", ref ActionStacksEX.Config.EnableCameraRelativeDashes);
+            ImGuiEx.SetItemTooltip("Changes dashes, such as En Avant and Elusive Jump, to be relative\nto the direction your camera is facing, rather than your character.");
+
+            using (ImGuiEx.DisabledBlock.Begin(!ActionStacksEX.Config.EnableCameraRelativeDashes))
+            {
+                ImGuiEx.Prefix(false);
+                save |= ImGui.Checkbox("Block Backward Dashes", ref ActionStacksEX.Config.EnableNormalBackwardDashes);
+                ImGuiEx.SetItemTooltip("Disables the previous option for any backward dash, such as Elusive Jump.");
+
+                if (ActionStacksEX.Config.EnableNormalBackwardDashes && save)
+                    ActionStacksEX.Config.EnableReverseBackwardDashes = false;
+
+                ImGuiEx.Prefix(true);
+                save |= ImGui.Checkbox($"Reverse Backward Dashes", ref ActionStacksEX.Config.EnableReverseBackwardDashes);
+                ImGuiEx.SetItemTooltip($"Dashes such as Elusive Jump will dash forward relative to the camera instead of backwards.");
+
+                if (ActionStacksEX.Config.EnableReverseBackwardDashes && save)
+                    ActionStacksEX.Config.EnableNormalBackwardDashes = false;
+
+            }
+
+            ImGuiEx.EndGroupBox();
+        }
+
+        ImGui.SameLine();
+
+        if (ImGuiEx.BeginGroupBox("Auto", 0.5f))
+        {
+            save |= ImGui.Checkbox("Enable Auto Dismount", ref ActionStacksEX.Config.EnableAutoDismount);
+            ImGuiEx.SetItemTooltip("Automatically dismounts when an action is used, prior to using the action.");
+
+            save |= ImGui.Checkbox("Enable Auto Cast Cancel", ref ActionStacksEX.Config.EnableAutoCastCancel);
+            ImGuiEx.SetItemTooltip("Automatically cancels casting when the target dies.");
+
+            save |= ImGui.Checkbox("Enable Auto Target", ref ActionStacksEX.Config.EnableAutoTarget);
+            ImGuiEx.SetItemTooltip("Automatically targets the closest enemy when no target is specified for a targeted attack.");
+
+            using (ImGuiEx.DisabledBlock.Begin(!ActionStacksEX.Config.EnableAutoTarget))
+            {
+                ImGuiEx.Prefix(false);
+                save |= ImGui.Checkbox("Enable Auto Change Target", ref ActionStacksEX.Config.EnableAutoChangeTarget);
+                ImGuiEx.SetItemTooltip("Additionally targets the closest enemy when your main target is incorrect for a targeted attack.");
+
+                ImGuiEx.Prefix(true);
+                save |= ImGui.Checkbox("Ignore Camera", ref ActionStacksEX.Config.IgnoreCamera);
+                ImGuiEx.SetItemTooltip("Picks a target even if they're not in camera view.");
+            }
+
+            var _ = ActionStacksEX.Config.AutoFocusTargetID != 0;
+            if (ImGui.Checkbox("Enable Auto Focus Target", ref _))
+            {
+                ActionStacksEX.Config.AutoFocusTargetID = _ ? PronounManager.OrderedIDs.First() : 0;
+                save = true;
+            }
+            ImGuiEx.SetItemTooltip("Automatically sets the focus target to the selected target type when possible.");
+
+            using (ImGuiEx.DisabledBlock.Begin(!_))
+            {
+                ImGuiEx.Prefix(false);
+                save |= DrawTargetTypeCombo("##AutoFocusTargetID", ref ActionStacksEX.Config.AutoFocusTargetID);
+
+                ImGuiEx.Prefix(true);
+                save |= ImGui.Checkbox("Enable Out of Combat##AutoFocusTarget", ref ActionStacksEX.Config.EnableAutoFocusTargetOutOfCombat);
+            }
+
+            save |= ImGui.Checkbox("Enable Auto Refocus Target", ref ActionStacksEX.Config.EnableAutoRefocusTarget);
+            ImGuiEx.SetItemTooltip("While in duties, attempts to focus target whatever was previously focus targeted if the focus target is lost.");
+
+            save |= ImGui.Checkbox("Enable Auto Attacks on Spells", ref ActionStacksEX.Config.EnableSpellAutoAttacks);
+            ImGuiEx.SetItemTooltip("Causes spells (and some other actions) to start using auto attacks just like weaponskills.");
+
+            using (ImGuiEx.DisabledBlock.Begin(!ActionStacksEX.Config.EnableSpellAutoAttacks))
+            {
+                ImGuiEx.Prefix(true);
+                if (ImGui.Checkbox("Enable Out of Combat##SpellAutos", ref ActionStacksEX.Config.EnableSpellAutoAttacksOutOfCombat))
+                {
+                    if (ActionStacksEX.Config.EnableSpellAutoAttacksOutOfCombat)
+                        Game.spellAutoAttackPatch.Enable();
+                    else
+                        Game.spellAutoAttackPatch.Disable();
+                    save = true;
+                }
+                ImGuiEx.SetItemTooltip("WARNING: This can cause early pulls on certain bosses!");
+            }
+
+            ImGuiEx.EndGroupBox();
+        }
+
+        if (ImGuiEx.BeginGroupBox("Queuing", 0.5f))
+        {
+            if (ImGui.Checkbox("Enable Ground Target Queuing", ref ActionStacksEX.Config.EnableGroundTargetQueuing))
+            {
+                Game.queueGroundTargetsPatch.Toggle();
+                save = true;
+            }
+            ImGuiEx.SetItemTooltip("Ground targets will insert themselves into the action queue,\ncausing them to immediately be used as soon as possible, like other OGCDs.");
+
+            save |= ImGui.Checkbox("Enable Queuing More", ref ActionStacksEX.Config.EnableQueuingMore);
+            ImGuiEx.SetItemTooltip("Allows all items and LBs to be queued.");
+
+            save |= ImGui.Checkbox("Always Queue Macros", ref ActionStacksEX.Config.EnableMacroQueue);
+            ImGuiEx.SetItemTooltip("All macros will behave as if /macroqueue was used.");
+
+            save |= ImGui.Checkbox("Enable Queue Adjustments (BETA)", ref ActionStacksEX.Config.EnableQueueAdjustments);
+            ImGuiEx.SetItemTooltip("Changes how the game handles queuing actions.\nThis is a beta feature, please let me know if anything is not working as expected.");
+
+            using (ImGuiEx.DisabledBlock.Begin(!ActionStacksEX.Config.EnableQueueAdjustments))
+            using (ImGuiEx.ItemWidthBlock.Begin(ImGui.CalcItemWidth() / 2))
+            {
+                ImGuiEx.Prefix(false);
+                save |= ImGui.Checkbox("##Enable GCD Adjusted Threshold", ref ActionStacksEX.Config.EnableGCDAdjustedQueueThreshold);
+                ImGuiEx.SetItemTooltip("Modifies the threshold based on the current GCD.");
+
+                ImGui.SameLine();
+                save |= ImGui.SliderFloat("Queue Threshold", ref ActionStacksEX.Config.QueueThreshold, 0.1f, 2.5f, "%.1f");
+                ImGuiEx.SetItemTooltip("Time remaining on an action's cooldown to allow the game\nto queue up the next one when pressed early. Default: 0.5."
+                    + (ActionStacksEX.Config.EnableGCDAdjustedQueueThreshold ? $"\nGCD Adjusted Threshold: {ActionStacksEX.Config.QueueThreshold * ActionManager.GCDRecast / 2500f}" : string.Empty));
+
+                ImGui.BeginGroup();
+                ImGuiEx.Prefix(false);
+                save |= ImGui.Checkbox("##Enable Requeuing", ref ActionStacksEX.Config.EnableRequeuing);
+                using (ImGuiEx.DisabledBlock.Begin(!ActionStacksEX.Config.EnableRequeuing))
+                {
+                    ImGui.SameLine();
+                    save |= ImGui.SliderFloat("Queue Lock Threshold", ref ActionStacksEX.Config.QueueLockThreshold, 0.1f, 2.5f, "%.1f");
+                }
+                ImGui.EndGroup();
+                ImGuiEx.SetItemTooltip("When enabled, allows requeuing until the queued action's cooldown is below this value.");
+
+                ImGuiEx.Prefix(true);
+                save |= ImGui.SliderFloat("Action Lockout", ref ActionStacksEX.Config.QueueActionLockout, 0, 2.5f, "%.1f");
+                ImGuiEx.SetItemTooltip("Blocks the same action from being queued again if it has been on cooldown for less than this value.");
+            }
+
+            ImGuiEx.EndGroupBox();
+        }
+
+        ImGui.SameLine();
+
+        if (ImGuiEx.BeginGroupBox("Sunderings", 0.5f))
+        {
+            save |= ImGui.Checkbox("Sunder Meditation", ref ActionStacksEX.Config.EnableDecomboMeditation);
+            ImGuiEx.SetItemTooltip("Removes the Meditation <-> Steel Peak / Forbidden Chakra combo. You will need to use\nthe hotbar feature below to place one of them on your hotbar in order to use them again.\nSteel Peak ID: 25761\nForbidden Chakra ID: 3547");
+
+            save |= ImGui.Checkbox("Sunder Bunshin", ref ActionStacksEX.Config.EnableDecomboBunshin);
+            ImGuiEx.SetItemTooltip("Removes the Bunshin <-> Phantom Kamaitachi combo. You will need to use\nthe hotbar feature below to place it on your hotbar in order to use it again.\nPhantom Kamaitachi ID: 25774");
+
+            save |= ImGui.Checkbox("Sunder Wanderer's Minuet", ref ActionStacksEX.Config.EnableDecomboWanderersMinuet);
+            ImGuiEx.SetItemTooltip("Removes the Wanderer's Minuet -> Pitch Perfect combo. You will need to use\nthe hotbar feature below to place it on your hotbar in order to use it again.\nPitch Perfect ID: 7404");
+
+            save |= ImGui.Checkbox("Sunder Liturgy of the Bell", ref ActionStacksEX.Config.EnableDecomboLiturgy);
+            ImGuiEx.SetItemTooltip("Removes the Liturgy of the Bell combo. You will need to use the hotbar\nfeature below to place it on your hotbar in order to use it again.\nLiturgy of the Bell (Detonate) ID: 28509");
+
+            save |= ImGui.Checkbox("Sunder Earthly Star", ref ActionStacksEX.Config.EnableDecomboEarthlyStar);
+            ImGuiEx.SetItemTooltip("Removes the Earthly Star combo. You will need to use the hotbar\nfeature below to place it on your hotbar in order to use it again.\nStellar Detonation ID: 8324");
+
+            save |= ImGui.Checkbox("Sunder Minor Arcana", ref ActionStacksEX.Config.EnableDecomboMinorArcana);
+            ImGuiEx.SetItemTooltip("Removes the Minor Arcana -> Lord / Lady of Crowns combo. You will need to use the\nhotbar feature below to place one of them on your hotbar in order to use them again.\nLord of Crowns ID: 7444\nLady of Crowns ID: 7445");
+
+            save |= ImGui.Checkbox("Sunder Geirskogul", ref ActionStacksEX.Config.EnableDecomboGeirskogul);
+            ImGuiEx.SetItemTooltip("Removes the Geirskogul -> Nastrond combo. You will need to use the\nhotbar feature below to place it on your hotbar in order to use it again.\nNastrond ID: 7400");
+
+            ImGuiEx.EndGroupBox();
+        }
+
+        if (ImGuiEx.BeginGroupBox("Misc", 0.5f))
+        {
+            save |= ImGui.Checkbox("Enable Frame Alignment", ref ActionStacksEX.Config.EnableFrameAlignment);
+            ImGuiEx.SetItemTooltip("Aligns the game's frames with the GCD and animation lock.\nNote: This option will cause an almost unnoticeable stutter when either of these timers ends.");
+
+            if (ImGui.Checkbox("Enable Decimal Waits (Fractionality)", ref ActionStacksEX.Config.EnableFractionality))
+            {
+                Game.waitSyntaxDecimalPatch.Toggle();
+                Game.waitCommandDecimalPatch.Toggle();
+                save = true;
+            }
+            ImGuiEx.SetItemTooltip("Allows decimals in wait commands and removes the 60 seconds cap (e.g. <wait.0.5> or /wait 0.5).");
+
+            if (ImGui.Checkbox("Enable Unassignable Actions in Commands", ref ActionStacksEX.Config.EnableUnassignableActions))
+            {
+                Game.allowUnassignableActionsPatch.Toggle();
+                save = true;
+            }
+            ImGuiEx.SetItemTooltip("Allows using normally unavailable actions in \"/ac\", such as The Forbidden Chakra or Stellar Detonation.");
+
+            save |= ImGui.Checkbox("Enable Player Names in Commands", ref ActionStacksEX.Config.EnablePlayerNamesInCommands);
+            ImGuiEx.SetItemTooltip("Allows using the \"First Last@World\" syntax for any command requiring a target.");
+
+            ImGuiEx.EndGroupBox();
+        }
+
+        ImGui.SameLine();
+
+        if (ImGuiEx.BeginGroupBox("Place on Hotbar (HOVER ME FOR INFORMATION)", 0.5f, new ImGuiEx.GroupBoxOptions
+        {
+            HeaderTextAction = () => ImGuiEx.SetItemTooltip(
+                "This will allow you to place various things on the hotbar that you can't normally."
+                +"\nIf you don't know what this can be used for, don't touch it."
+                +"\nSome examples of things you can do:"
+                +"\n\tPlace a certain action on the hotbar to be used with one of the \"Sundering\" features. The IDs are in each setting's tooltip."
+                +"\n\tPlace a certain doze and sit emote on the hotbar (Emote, 88 and 95)."
+                +"\n\tPlace a currency (Item, 1-99) on the hotbar to see how much you have without opening the currency menu."
+                +"\n\tRevive flying mount roulette (GeneralAction, 24).")
+        }))
+        {
+            ImGui.Combo("Bar", ref hotbar, "1\02\03\04\05\06\07\08\09\010\0XHB 1\0XHB 2\0XHB 3\0XHB 4\0XHB 5\0XHB 6\0XHB 7\0XHB 8");
+            ImGui.Combo("Slot", ref hotbarSlot, "1\02\03\04\05\06\07\08\09\010\011\012\013\014\015\016");
+            var hotbarSlotType = Enum.GetName(typeof(RaptureHotbarModule.HotbarSlotType), commandType) ?? commandType.ToString();
+            if (ImGui.BeginCombo("Type", hotbarSlotType))
+            {
+                for (int i = 1; i <= 32; i++)
+                {
+                    if (!ImGui.Selectable($"{Enum.GetName(typeof(RaptureHotbarModule.HotbarSlotType), i) ?? i.ToString()}##{i}", commandType == i)) continue;
+                    commandType = i;
+                }
+                ImGui.EndCombo();
+            }
+
+            DrawHotbarIDInput((RaptureHotbarModule.HotbarSlotType)commandType);
+
+            if (ImGui.Button("Execute"))
+                Game.SetHotbarSlot(hotbar, hotbarSlot, (byte)commandType, commandID);
+            ImGuiEx.EndGroupBox();
+        }
+
+        if (save)
+            ActionStacksEX.Config.Save();
+    }
+
+    public static void DrawHotbarIDInput(RaptureHotbarModule.HotbarSlotType slotType)
+    {
+        switch ((RaptureHotbarModule.HotbarSlotType)commandType)
+        {
+            case RaptureHotbarModule.HotbarSlotType.Action:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<Action> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.Item:
+                const int hqID = 1_000_000;
+                var _ = commandID >= hqID ? commandID - hqID : commandID;
+                if (ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref _, new ImGuiEx.ExcelSheetComboOptions<Item> { FormatRow = r => $"[#{r.RowId}] {r.Name}" }))
+                    commandID = commandID >= hqID ? _ + hqID : _;
+                var hq = commandID >= hqID;
+                if (ImGui.Checkbox("HQ", ref hq))
+                    commandID = hq ? commandID + hqID : commandID - hqID;
+                break;
+            case RaptureHotbarModule.HotbarSlotType.EventItem:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<EventItem> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.Emote:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<Emote> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.Marker:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<Marker> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.CraftAction:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<CraftAction> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.GeneralAction:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<GeneralAction> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.BuddyAction:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<BuddyAction> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.MainCommand:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<MainCommand> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.Companion:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<Companion> { FormatRow = r => $"[#{r.RowId}] {r.Singular}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.PetAction:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<PetAction> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.Mount:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<Mount> { FormatRow = r => $"[#{r.RowId}] {r.Singular}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.FieldMarker:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<FieldMarker> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.Recipe:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<Recipe> { FormatRow = r => $"[#{r.RowId}] {r.ItemResult.Value.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.ChocoboRaceAbility:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<ChocoboRaceAbility> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.ChocoboRaceItem:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<ChocoboRaceItem> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.ExtraCommand:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<ExtraCommand> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.PvPQuickChat:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<QuickChat> { FormatRow = r => $"[#{r.RowId}] {r.NameAction}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.PvPCombo:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<ActionComboRoute> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.BgcArmyAction:
+                // Sheet is BgcArmyAction, but it doesn't appear to be in Lumina
+                var __ = (int)commandID;
+                if (ImGui.Combo("ID", ref __, "[#0]\0[#1] Engage\0[#2] Disengage\0[#3] Re-engage\0[#4] Execute Limit Break\0[#5] Display Order Hotbar"))
+                    commandID = (uint)__;
+                break;
+            case RaptureHotbarModule.HotbarSlotType.PerformanceInstrument:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<Perform> { FormatRow = r => $"[#{r.RowId}] {r.Instrument}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.McGuffin:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<McGuffin> { FormatRow = r => $"[#{r.RowId}] {r.UIData.Value.Name}" });
+                break;
+            case RaptureHotbarModule.HotbarSlotType.Ornament:
+                ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<Ornament> { FormatRow = r => $"[#{r.RowId}] {r.Singular}" });
+                break;
+            // Doesn't appear to have a sheet
+            //case HotbarSlotType.LostFindsItem:
+            //    ImGuiEx.ExcelSheetCombo($"ID##{commandType}", ref commandID, new ImGuiEx.ExcelSheetComboOptions<> { FormatRow = r => $"[#{r.RowId}] {r.Name}" });
+            //    break;
+            default:
+                var ___ = (int)commandID;
+                if (ImGui.InputInt("ID", ref ___))
+                    commandID = (uint)___;
+                break;
+        }
+    }
+
+    private static unsafe void DrawCustomPlaceholders()
+    {
+        if (!ImGui.BeginTable("CustomPronounInfoTable", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY)) return;
+
+        ImGui.TableSetupScrollFreeze(0, 1);
+        ImGui.TableSetupColumn("Name");
+        ImGui.TableSetupColumn("Placeholder");
+        ImGui.TableSetupColumn("Current Target");
+        ImGui.TableHeadersRow();
+
+        foreach (var (placeholder, pronoun) in PronounManager.CustomPlaceholders)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+
+            ImGui.TextUnformatted(pronoun.Name);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(placeholder);
+
+            var p = pronoun.GetGameObject();
+            if (p == null) continue;
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(p->NameString);
+        }
+
+        ImGui.EndTable();
+    }
+
+    private static void DrawStackHelp()
+    {
+        ImGui.Text("Creating a Stack");
+        ImGui.Indent();
+        ImGui.TextWrapped("To start, click the + button in the top left corner, this will create a new stack that you can begin adding actions and functionality to.");
+        ImGui.Unindent();
+
+        ImGui.Separator();
+
+        ImGui.Text("Editing a Stack");
+        ImGui.Indent();
+        ImGui.TextWrapped("Click on a stack from the top left list to display the editing panes for that it. The bottom left pane is where the " +
+            "main settings reside, these will change the base functionality for the stack itself.");
+        ImGui.Unindent();
+
+        ImGui.Separator();
+
+        ImGui.Text("Editing a Stack's Actions");
+        ImGui.Indent();
+        ImGui.TextWrapped("The top right pane is where you can add actions, click the + to bring up a box that you can search for them through. " +
+            "After adding every action that you would like to change the functionality of, you can additionally select which ones you would like to " +
+            "\"adjust\". This means that the selected action will match any other one that replaces it on the hotbar. This can be due to a trait " +
+            "(Holy <-> Holy III), a buff (Play -> The Balance) or another plugin (XIVCombo). An example case where you might want it off is when the " +
+            "adjusted action has a separate use case, such as XIVCombo turning Play into Draw. You can change the functionality of the individual " +
+            "cards while not affecting Draw by adding each of them to the list. Additionally, if the action is currently adjusted by the game, the " +
+            "option will be highlighted in green as an indicator.");
+        ImGui.Unindent();
+
+        ImGui.Separator();
+
+        ImGui.Text("Editing a Stack's Functionality");
+        ImGui.Indent();
+        ImGui.TextWrapped("The bottom right pane is where you can change the functionality of the selected actions, by setting a list of targets to " +
+            "extend or replace the game's. When the action is used, the plugin will attempt to determine, from top to bottom, which target is a valid choice. " +
+            "This will execute before the game's own target priority system and only allow it to continue if not blocked by the stack. If any of the targets " +
+            "are valid choices, the plugin will change the action's target to the new one and, additionally, replace the action with the override if set.");
+        ImGui.Unindent();
+
+        ImGui.Separator();
+
+        ImGui.Text("Stack Priority");
+        ImGui.Indent();
+        ImGui.TextWrapped("The executed stack will depend on which one, from top to bottom, first contains the action being used and has its modifier " +
+            "keys held. If you would like to use \"All Actions\" in a stack, you can utilize this to add overrides above it in the list. Note that a stack " +
+            "does not need to contain any functionality in the event that you would like for a set of actions to never be changed by \"All Actions\" and " +
+            "instead use the original.");
+        ImGui.Unindent();
+    }
+}

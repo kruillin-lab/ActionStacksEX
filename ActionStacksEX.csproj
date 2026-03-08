@@ -1,0 +1,32 @@
+<Project Sdk="Dalamud.NET.Sdk/14.0.1">
+
+    <PropertyGroup>
+        <Version>1.0.0.0</Version>
+        <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+        <PlatformTarget>x64</PlatformTarget>
+        <Platforms>x64;AnyCPU</Platforms>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+        <NoWarn>CA1416</NoWarn>
+        <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+        <AssemblyName>ActionStacksEX</AssemblyName>
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="ECommons" Version="3.1.0.13" />
+    </ItemGroup>
+
+    <!-- Copy to devPlugins after successful build -->
+    <Target Name="CopyToDevPlugins" AfterTargets="Build">
+        <PropertyGroup>
+            <DevPluginsPath>$(APPDATA)\XIVLauncher\devPlugins\ActionStacksEX\</DevPluginsPath>
+        </PropertyGroup>
+        <MakeDir Directories="$(DevPluginsPath)" Condition="!Exists('$(DevPluginsPath)')" />
+        <Copy SourceFiles="$(OutputPath)ActionStacksEX.dll" DestinationFiles="$(DevPluginsPath)ActionStacksEX.dll" />
+        <Copy SourceFiles="$(OutputPath)ECommons.dll" DestinationFiles="$(DevPluginsPath)ECommons.dll" />
+        <Copy SourceFiles="$(MSBuildProjectDirectory)\ActionStacksEX.json" DestinationFiles="$(DevPluginsPath)ActionStacksEX.json" />
+        <Message Importance="high" Text="Copied ActionStacksEX and dependencies to $(DevPluginsPath)" />
+    </Target>
+
+</Project>

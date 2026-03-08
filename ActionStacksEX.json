@@ -1,0 +1,18 @@
+{
+  "Author": "Maomi Gato",
+  "Name": "ActionStacksEX",
+  "Punchline": "Enhanced battle system QoL.",
+  "Description": "An enhanced version of ReActionEX with more features, decoupled from Parselord.",
+  "IconUrl": "",
+  "ImageUrls": [
+    ""
+  ],
+  "RepoUrl": "",
+  "CategoryTags": [
+    "jobs"
+  ],
+  "InternalName": "ActionStacksEX",
+  "AssemblyVersion": "1.0.0.0",
+  "Changelog": "Initial release as standalone plugin.",
+  "DalamudApiLevel": 14
+}

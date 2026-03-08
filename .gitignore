@@ -1,0 +1,18 @@
+# Build outputs
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# IDE
+.idea/
+*.DotSettings.user
+
+# Dependencies
+packages/
+
+# Local dev
+*.local.md
