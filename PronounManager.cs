@@ -383,6 +383,15 @@ public class DeadPronoun : IGamePronoun
     public unsafe GameObject* GetGameObject() => (GameObject*)(PronounHelpers.GetPartyMembers().FirstOrDefault(x => x != null && x.IsDead && !x.StatusList.Any(y => y.StatusId is 148 or 2648))?.Address);
 }
 
+public class OptimalAoEPronoun : IGamePronoun
+{
+    public string Name => "Optimal AoE Target";
+    public string Placeholder => "<optimalaoe>";
+    public uint ID => 11_010;
+    public unsafe GameObject* GetGameObject()
+        => SpatialMath.FindBestAoETarget(0);
+}
+
 public class DispellablePartyMemberPronoun : IGamePronoun
 {
     public string Name => "Dispellable Party Member";
@@ -619,6 +628,7 @@ public static class PronounManager
         10_023, // Lowest HP DPS
         11_001, // Dead
         11_002, // Dispellable Party Member
+        11_010, // Optimal AoE
     ];
     public static void Initialize()
     {
