@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Numerics;
 using ActionType = FFXIVClientStructs.FFXIV.Client.Game.ActionType;
 using Character = FFXIVClientStructs.FFXIV.Client.Game.Character.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
@@ -20,6 +21,7 @@ public static unsafe class ActionStackManager
     public static event PostUseActionDelegate PostUseAction;
 
     private static ulong queuedGroundTargetObjectID = 0;
+    private static Vector3 _pendingGroundTargetCentroid = Vector3.Zero;
 
     public static Bool OnUseAction(ActionManager* actionManager, uint actionType, uint actionID, ulong targetObjectID, uint param, uint useType, int pvp, bool* isGroundTarget)
     {
@@ -75,6 +77,8 @@ public static unsafe class ActionStackManager
 
             PostActionStack?.Invoke(actionManager, actionType, actionID, finalActionID, ref targetObjectID, param, useType, pvp);
 
+            _pendingGroundTargetCentroid = Vector3.Zero;
+
             var result = Game.UseActionHook.Original(actionManager, actionType, actionID, targetObjectID, param, useType, pvp, isGroundTarget);
 
             if (succeeded && useType == 0 && result == 0)
@@ -108,6 +112,12 @@ public static unsafe class ActionStackManager
 
             if (ActionStacksEX.Config.EnableInstantGroundTarget && !succeeded && queuedGroundTargetObjectID == 0)
                 SetInstantGroundTarget(actionManager, actionType, useType);
+
+            // Spatial Intelligence: Party Centroid Ground Targeting
+            if (_pendingGroundTargetCentroid != Vector3.Zero)
+            {
+                actionManager->queuedGroundTargetObjectID = 0;
+            }
 
             return result;
         }
@@ -304,5 +314,10 @@ public static unsafe class ActionStackManager
     {
         if ((ActionStacksEX.Config.EnableBlockMiscInstantGroundTargets && actionType == 11) || useType == 2 && actionType == 1 || actionType == 15) return;
         actionManager->activateGroundTarget = 1;
+    }
+
+    public static void SetPendingGroundTargetCentroid(Vector3 centroid)
+    {
+        _pendingGroundTargetCentroid = centroid;
     }
 }
