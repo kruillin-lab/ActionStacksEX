@@ -677,6 +677,22 @@ public static class PluginUI
             ImGuiEx.EndGroupBox();
         }
 
+        if (ImGuiEx.BeginGroupBox("Spatial Intelligence", 0.5f))
+        {
+            save |= ImGui.Checkbox("Enable Optimal AoE Targeting", ref ActionStacksEX.Config.EnableOptimalAoE);
+            ImGuiEx.SetItemTooltip("Target enemy that maximizes AoE hit count. Use <optimalaoe> in stacks.");
+            ImGui.SameLine();
+            if (ImGui.SmallButton("?##OptimalAoE"))
+                ImGui.SetTooltip("Selects the enemy that would result in the highest AoE hit count for the triggering ability.\nUses circle/line/cone geometry from action data.");
+
+            save |= ImGui.Checkbox("Party Centroid Ground Targeting", ref ActionStacksEX.Config.EnablePartyCentroidGroundTargeting);
+            ImGuiEx.SetItemTooltip("Auto-redirect ground-target abilities to the geometric center of your alive party members.");
+            ImGui.SameLine();
+            if (ImGui.SmallButton("?##PartyCentroid"))
+                ImGui.SetTooltip("Calculates the centroid of all alive party members and redirects ground-target\nabilities (e.g., Sacred Soil, Earthly Star) to that position automatically.\nNote: Visual overlay requires runtime verification.");
+        }
+        ImGuiEx.EndGroupBox();
+
         if (save)
             ActionStacksEX.Config.Save();
     }
