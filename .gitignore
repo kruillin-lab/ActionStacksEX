@@ -16,3 +16,4 @@ packages/
 
 # Local dev
 *.local.md
+.worktrees/
