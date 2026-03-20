@@ -12,6 +12,8 @@ public enum ActionShape
 
 public static unsafe class SpatialMath
 {
+    private static readonly Vector3[] _enemyPosBuffer = new Vector3[50];
+
     public static Vector2 Flatten(this Vector3 v) => new(v.X, v.Z);
     public static float FlatDist(this Vector3 a, Vector3 b) => Vector2.Distance(a.Flatten(), b.Flatten());
     public static float FlatDistSquared(this Vector3 a, Vector3 b)
