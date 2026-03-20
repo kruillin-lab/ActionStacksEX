@@ -14,6 +14,12 @@ public static unsafe class SpatialMath
 {
     public static Vector2 Flatten(this Vector3 v) => new(v.X, v.Z);
     public static float FlatDist(this Vector3 a, Vector3 b) => Vector2.Distance(a.Flatten(), b.Flatten());
+    public static float FlatDistSquared(this Vector3 a, Vector3 b)
+    {
+        var dx = a.X - b.X;
+        var dz = a.Z - b.Z;
+        return dx * dx + dz * dz;
+    }
     public static Vector2 NormalizeSafe(this Vector2 v)
     {
         var len = v.Length();
@@ -26,8 +32,9 @@ public static unsafe class SpatialMath
         var r2 = radius * radius;
         foreach (ref readonly var pos in enemyPositions)
         {
-            var d2 = new Vector2(pos.X - center.X, pos.Z - center.Z).LengthSquared();
-            if (d2 <= r2) count++;
+            var dx = pos.X - center.X;
+            var dz = pos.Z - center.Z;
+            if (dx * dx + dz * dz <= r2) count++;
         }
         return count;
     }
@@ -50,7 +57,8 @@ public static unsafe class SpatialMath
         var toPoint = point.Flatten() - origin.Flatten();
         var dist = toPoint.Length();
         if (dist > range) return false;
-        var dir = dist > 0 ? toPoint / dist : Vector2.Zero;
+        if (dist < 0.0001f) return true;
+        var dir = toPoint / dist;
         var dot = Vector2.Dot(dir, facing);
         if (dot <= 0) return false;
         var lateral = MathF.Sqrt(MathF.Max(0, 1f - dot * dot));
@@ -91,7 +99,7 @@ public static unsafe class SpatialMath
         var rot = localPlayer->Rotation;
         var facing = new Vector2(MathF.Cos(rot), MathF.Sin(rot));
 
-        var positions = new Vector3[50];
+        var positions = _enemyPosBuffer;
         int n = 0;
         foreach (var obj in Hypostasis.Dalamud.DalamudApi.Svc.Objects)
         {
@@ -126,7 +134,13 @@ public static unsafe class SpatialMath
             }
             else if (count == bestCount && count > 0)
             {
-                if (playerPos.FlatDist(enemyPos) < playerPos.FlatDist(best->Position))
+                var dxBest = enemyPos.X - playerPos.X;
+                var dzBest = enemyPos.Z - playerPos.Z;
+                var distBestSq = dxBest * dxBest + dzBest * dzBest;
+                var dxCurrent = best->Position.X - playerPos.X;
+                var dzCurrent = best->Position.Z - playerPos.Z;
+                var distCurrentSq = dxCurrent * dxCurrent + dzCurrent * dzCurrent;
+                if (distBestSq < distCurrentSq)
                     best = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)bc.Address;
             }
         }
