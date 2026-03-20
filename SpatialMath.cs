@@ -1,5 +1,11 @@
 using System;
 using System.Numerics;
+using Dalamud.Game.ClientState.Objects.SubKinds;
+using Dalamud.Game.ClientState.Objects.Types;
+using ECommons.DalamudServices;
+using ECommons.GameFunctions;
+using FFXIVClientStructs.FFXIV.Client.Game.Character;
+using FFXIVClientStructs.FFXIV.Client.Game.Object;
 
 namespace ActionStacksEX;
 
@@ -98,15 +104,16 @@ public static unsafe class SpatialMath
 
         var playerPos = localPlayer.Position;
 
-        var rot = localPlayer->Rotation;
+        var rot = localPlayer.Rotation;
         var facing = new Vector2(MathF.Cos(rot), MathF.Sin(rot));
 
         var positions = _enemyPosBuffer;
         int n = 0;
-        foreach (var obj in Hypostasis.Dalamud.DalamudApi.Svc.Objects)
+        foreach (var obj in Svc.Objects)
         {
             if (n >= 50) break;
-            if (obj is ECommons.GameFunctions.IBattleChara bc && Extensions.IsEnemy(bc) && !bc.IsDead)
+            var bc = obj as IBattleChara;
+            if (bc != null && Extensions.IsEnemy(bc) && !bc.IsDead)
             {
                 positions[n++] = bc.Position;
             }
@@ -116,9 +123,10 @@ public static unsafe class SpatialMath
         FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject* best = null;
         int bestCount = 0;
 
-        foreach (var obj in Hypostasis.Dalamud.DalamudApi.Svc.Objects)
+        foreach (var obj in Svc.Objects)
         {
-            if (obj is not ECommons.GameFunctions.IBattleChara bc || !Extensions.IsEnemy(bc) || bc.IsDead) continue;
+            var bc = obj as IBattleChara;
+            if (bc == null || !Extensions.IsEnemy(bc) || bc.IsDead) continue;
             var enemyPos = bc.Position;
 
             int count = shape switch
@@ -132,7 +140,7 @@ public static unsafe class SpatialMath
             if (count > bestCount)
             {
                 bestCount = count;
-                best = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)bc.Address;
+                best = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)obj.Address;
             }
             else if (count == bestCount && count > 0)
             {
@@ -143,7 +151,7 @@ public static unsafe class SpatialMath
                 var dzCurrent = best->Position.Z - playerPos.Z;
                 var distCurrentSq = dxCurrent * dxCurrent + dzCurrent * dzCurrent;
                 if (distBestSq < distCurrentSq)
-                    best = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)bc.Address;
+                    best = (FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject*)obj.Address;
             }
         }
         return best;
