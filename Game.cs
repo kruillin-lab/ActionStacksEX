@@ -6,6 +6,7 @@ using FFXIVClientStructs.FFXIV.Client.System.Framework;
 using FFXIVClientStructs.FFXIV.Client.UI.Misc;
 using FFXIVClientStructs.FFXIV.Client.UI.Shell;
 using Hypostasis.Game.Structures;
+using InteropGenerator.Runtime;
 using Camera = FFXIVClientStructs.FFXIV.Client.Game.Camera;
 using GameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 using ReAction = ActionStacksEX.ActionStacksEX;
@@ -75,7 +76,7 @@ public static unsafe class Game
     public static GameObject* GetGameObjectFromObjectID(ulong id) => fpGetGameObjectFromObjectID(id, false);
 
     // The game is dumb and I cannot check LoS easily because not facing the target will override it
-    public static bool IsActionOutOfRange(uint actionID, GameObject* o) => DalamudApi.ClientState.LocalPlayer is { } p && o != null
+    public static bool IsActionOutOfRange(uint actionID, GameObject* o) => DalamudApi.ObjectTable.LocalPlayer is { } p && o != null
         && FFXIVClientStructs.FFXIV.Client.Game.ActionManager.GetActionInRangeOrLoS(actionID, (GameObject*)p.Address, o) is 566; // Returns the log message (562 = LoS, 565 = Not Facing Target, 566 = Out of Range)
 
     public static GameObject* GetMouseOverObject(GameObjectArray* array)
@@ -129,11 +130,11 @@ public static unsafe class Game
         DalamudApi.TargetManager.FocusTarget = DalamudApi.ObjectTable.FirstOrDefault(o => o.DataId == FocusTargetInfo.DataID && o.Name.ToString() == FocusTargetInfo.Name);
     }
 
-    private delegate GameObject* ResolvePlaceholderDelegate(PronounModule* pronounModule, string text, Bool defaultToTarget, Bool allowPlayerNames, Bool a5);
+    private delegate GameObject* ResolvePlaceholderDelegate(PronounModule* pronounModule, CStringPointer text, byte defaultToTarget, byte allowPlayerNames, bool a5);
     [HypostasisSignatureInjection("E8 ?? ?? ?? ?? 33 ED 4C 8B F8")]
     private static Hook<ResolvePlaceholderDelegate> ResolvePlaceholderHook;
-    private static GameObject* ResolvePlaceholderDetour(PronounModule* pronounModule, string text, Bool defaultToTarget, Bool allowPlayerNames, Bool a5) =>
-        ResolvePlaceholderHook.Original(pronounModule, text, defaultToTarget, allowPlayerNames || ReAction.Config.EnablePlayerNamesInCommands, a5);
+    private static GameObject* ResolvePlaceholderDetour(PronounModule* pronounModule, CStringPointer text, byte defaultToTarget, byte allowPlayerNames, bool a5) =>
+        ResolvePlaceholderHook.Original(pronounModule, text, defaultToTarget, (byte)(allowPlayerNames != 0 || ReAction.Config.EnablePlayerNamesInCommands ? 1 : 0), a5);
 
     private static GameObject* GetGameObjectFromPronounIDDetour(PronounModule* pronounModule, PronounID pronounID)
     {

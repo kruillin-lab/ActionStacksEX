@@ -28,6 +28,8 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
     {
         public string Name = string.Empty;
         public List<Action> Actions = [];
+        public uint TriggerAction = 0;
+        public bool UseAdjustedTrigger = false;
         public List<ActionStackItem> Items = [];
         public uint ModifierKeys = 0u;
         public bool BlockOriginal = false;

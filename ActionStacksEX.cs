@@ -33,6 +33,7 @@ public class ActionStacksEX(IDalamudPluginInterface pluginInterface) : DalamudPl
             throw new ApplicationException("Excel sheets failed to load!");
 
         DalamudApi.LogDebug($"Loaded {actionSheet.Count} actions and {statusSheet.Count} statuses.");
+        ActionStacksIpc.Initialize();
     }
 
     protected override void ToggleConfig() => PluginUI.IsVisible ^= true;
@@ -86,6 +87,7 @@ public class ActionStacksEX(IDalamudPluginInterface pluginInterface) : DalamudPl
     protected override void Dispose(bool disposing)
     {
         if (!disposing) return;
+        ActionStacksIpc.Dispose();
         Game.Dispose();
     }
 }

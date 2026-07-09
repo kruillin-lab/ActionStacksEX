@@ -49,7 +49,7 @@ public static unsafe class PronounHelpers
     public static GameObject* GetMemberByRole(JobRole role)
     {
         nint best = nint.Zero;
-        var player = DalamudApi.ClientState.LocalPlayer;
+        var player = DalamudApi.ObjectTable.LocalPlayer;
 
         var members = Common.GetPartyMembers().ToList();
         
@@ -98,7 +98,7 @@ public static unsafe class PronounHelpers
     {
         nint best = nint.Zero;
         float bestDist = furthest ? float.MinValue : float.MaxValue;
-        if (DalamudApi.ClientState.LocalPlayer is not { } p) return null;
+        if (DalamudApi.ObjectTable.LocalPlayer is not { } p) return null;
         Vector3 pPos = p.Position;
 
         if (party)
@@ -243,7 +243,7 @@ public class SelfPronoun : IGamePronoun
     public string Name => "Self <me>";
     public string Placeholder => "<me>";
     public uint ID => 10_001;
-    public unsafe GameObject* GetGameObject() => (GameObject*)DalamudApi.ClientState.LocalPlayer?.Address;
+    public unsafe GameObject* GetGameObject() => (GameObject*)DalamudApi.ObjectTable.LocalPlayer?.Address;
 }
 
 public class FocusTargetPronoun : IGamePronoun

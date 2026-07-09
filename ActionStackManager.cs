@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using ActionType = FFXIVClientStructs.FFXIV.Client.Game.ActionType;
 using Character = FFXIVClientStructs.FFXIV.Client.Game.Character.Character;
@@ -10,6 +11,8 @@ namespace ActionStacksEX;
 
 public static unsafe class ActionStackManager
 {
+    private const uint AutoRotationActionId = 1_000_000;
+
     public delegate void PreUseActionEventDelegate(ActionManager* actionManager, ref uint actionType, ref uint actionID, ref ulong targetObjectID, ref uint param, ref uint useType, ref int pvp);
     public static event PreUseActionEventDelegate PreUseAction;
     public delegate void PreActionStackDelegate(ActionManager* actionManager, ref uint actionType, ref uint actionID, ref uint adjustedActionID, ref ulong targetObjectID, ref uint param, uint useType, ref int pvp, out bool? ret);
@@ -20,23 +23,76 @@ public static unsafe class ActionStackManager
     public static event PostUseActionDelegate PostUseAction;
 
     private static ulong queuedGroundTargetObjectID = 0;
+    
+    // Track when each stack was last successfully executed to prevent multi-casting
+    private static readonly Dictionary<string, DateTime> lastStackExecution = new();
+    private static readonly TimeSpan stackExecutionWindow = TimeSpan.FromMilliseconds(3000); // 3 second window
+    
+    // Track the last executed action to prevent duplicate casts
+    private static uint lastExecutedAction = 0;
+    private static DateTime lastExecutionTime = DateTime.MinValue;
+    
+    // Track currently executing stack to prevent multi-item casting
+    private static string currentlyExecutingStack = "";
+    private static DateTime stackExecutionStart = DateTime.MinValue;
+    private static uint lockedTriggerAction = 0; // Track which specific trigger action is locked
+    private static uint preparedActionID = 0;
+    private static uint preparedAdjustedActionID = 0;
+    private static ulong preparedTargetObjectID = Game.InvalidObjectID;
+    private static long preparedUntil = 0;
+    private const long PreparedActionWindowMs = 750;
 
     public static Bool OnUseAction(ActionManager* actionManager, uint actionType, uint actionID, ulong targetObjectID, uint param, uint useType, int pvp, bool* isGroundTarget)
     {
         try
         {
-            if (DalamudApi.ClientState.LocalPlayer == null) return 0;
+            if (DalamudApi.ObjectTable.LocalPlayer == null) return 0;
 
-            var tryStack = useType is 0 or 1;
+            var tryStack = useType == 0 && actionID != AutoRotationActionId;
             if (useType == 100)
             {
                 useType = 0;
                 tryStack = true;
             }
+            
+            // DEBUG: Log every action use attempt
+            DalamudApi.LogDebug($"[ActionStacksEX] OnUseAction called: Type={actionType}, ID={actionID}, Target={targetObjectID:X}, useType={useType}, pvp={pvp}, tryStack={tryStack}");
+            
+            var adjustedActionID = actionType == 1 ? actionManager->CS.GetAdjustedActionId(actionID) : actionID;
+
+            if (tryStack && ShouldBypassPreparedAction(actionID, adjustedActionID, targetObjectID))
+            {
+                DalamudApi.LogDebug($"[ActionStacksEX] Bypassing stack processing for prepared action {adjustedActionID}.");
+                tryStack = false;
+            }
+            
+            // Check if we're in the middle of executing a stack (prevent multi-item casting)
+            if (!string.IsNullOrEmpty(currentlyExecutingStack))
+            {
+                var timeSinceExec = DateTime.Now - stackExecutionStart;
+                if (timeSinceExec < stackExecutionWindow)
+                {
+                    if (adjustedActionID == lockedTriggerAction)
+                    {
+                        DalamudApi.LogDebug($"[ActionStacksEX] Trigger {adjustedActionID} repeated while stack '{currentlyExecutingStack}' is executing ({timeSinceExec.TotalMilliseconds:F0}ms ago). Allowing normal action path.");
+                    }
+                    else
+                    {
+                        DalamudApi.LogDebug($"[ActionStacksEX] Stack '{currentlyExecutingStack}' is executing, but {adjustedActionID} is different trigger. Allowing.");
+                    }
+                }
+                else
+                {
+                    // Window expired, clear the flag
+                    DalamudApi.LogDebug($"[ActionStacksEX] Stack '{currentlyExecutingStack}' window expired. Clearing lock.");
+                    currentlyExecutingStack = "";
+                    lockedTriggerAction = 0;
+                }
+            }
+            
+            DalamudApi.LogDebug($"[ActionStacksEX] Original ID={actionID}, Adjusted ID={adjustedActionID}");
 
             PreUseAction?.Invoke(actionManager, ref actionType, ref actionID, ref targetObjectID, ref param, ref useType, ref pvp);
-
-            var adjustedActionID = actionType == 1 ? actionManager->CS.GetAdjustedActionId(actionID) : actionID;
 
             bool? ret = null;
             PreActionStack?.Invoke(actionManager, ref actionType, ref actionID, ref adjustedActionID, ref targetObjectID, ref param, useType, ref pvp, out ret);
@@ -45,6 +101,7 @@ public static unsafe class ActionStackManager
 
             var succeeded = false;
             uint finalActionID = adjustedActionID;
+            bool stackMatched = false;
             if (PluginModuleManager.GetModule<Modules.ActionStacks>().IsValid && tryStack && actionType == 1 && ActionStacksEX.actionSheet.TryGetValue(adjustedActionID, out var a))
             {
                 var modifierKeys = GetModifierKeys();
@@ -52,16 +109,42 @@ public static unsafe class ActionStackManager
                 {
                     var exactMatch = (stack.ModifierKeys & 8) != 0;
                     if (exactMatch ? stack.ModifierKeys != modifierKeys : (stack.ModifierKeys & modifierKeys) != stack.ModifierKeys) continue;
-                    if (!stack.Actions.Any(action
-                            => action.ID == 0
-                               || action.ID == 1 && a.CanTargetHostile
-                               || action.ID == 2 && (a.CanTargetAlly || a.CanTargetParty)
-                               || (action.UseAdjustedID ? actionManager->CS.GetAdjustedActionId(action.ID) : action.ID) == adjustedActionID))
-                        continue;
+                    
+                    if (!MatchesStackTrigger(actionManager, stack, adjustedActionID, a)) continue;
+                    
+                    stackMatched = true;
+                    DalamudApi.LogDebug($"[ActionStacksEX] Stack '{stack.Name}' triggered by action {adjustedActionID}");
+                    
+                    // Check if this stack was recently executed (prevent multi-casting)
+                    if (lastStackExecution.TryGetValue(stack.Name, out var lastExec))
+                    {
+                        var timeSinceLastExec = DateTime.Now - lastExec;
+                        if (timeSinceLastExec < stackExecutionWindow)
+                        {
+                            DalamudApi.LogDebug($"[ActionStacksEX] Stack '{stack.Name}' was executed {timeSinceLastExec.TotalMilliseconds:F0}ms ago, within {stackExecutionWindow.TotalMilliseconds:F0}ms window. Allowing original action.");
+                            // Don't block - let the original action execute
+                            break;
+                        }
+                    }
+                    
+                    // Check for duplicate rapid calls of the same trigger
+                    var timeSinceLastAction = DateTime.Now - lastExecutionTime;
+                    if (adjustedActionID == lastExecutedAction && timeSinceLastAction < TimeSpan.FromMilliseconds(100))
+                    {
+                        DalamudApi.LogDebug($"[ActionStacksEX] DUPLICATE: Trigger {adjustedActionID} was executed {timeSinceLastAction.TotalMilliseconds:F0}ms ago. Allowing original.");
+                        // Don't block rotation - just don't process stack this time
+                        break;
+                    }
 
                     if (!CheckActionStack(actionManager, adjustedActionID, stack, useType, out var newAction, out var newTarget))
                     {
-                        if (stack.BlockOriginal) return 0;
+                        if (stack.BlockOriginal) 
+                        {
+                            DalamudApi.LogDebug($"[ActionStacksEX] Stack '{stack.Name}' failed and BlockOriginal is true - blocking action");
+                            return 0;
+                        }
+                        // Stack matched but couldn't execute - don't try other stacks, let original action through
+                        DalamudApi.LogDebug($"[ActionStacksEX] Stack '{stack.Name}' failed but BlockOriginal is false - allowing original action {actionID}");
                         break;
                     }
 
@@ -69,12 +152,27 @@ public static unsafe class ActionStackManager
                     finalActionID = newAction;
                     targetObjectID = newTarget;
                     succeeded = true;
+                    // Record execution time to prevent multi-casting
+                    lastStackExecution[stack.Name] = DateTime.Now;
+                    lastExecutedAction = adjustedActionID; // Track trigger action
+                    lastExecutionTime = DateTime.Now;
+                    // Set global lock to prevent other items from this stack executing
+                    currentlyExecutingStack = stack.Name;
+                    lockedTriggerAction = adjustedActionID; // Record which trigger action started this
+                    stackExecutionStart = DateTime.Now;
+                    DalamudApi.LogDebug($"[ActionStacksEX] Stack '{stack.Name}' SUCCESS: Executing action {newAction}. LOCKED trigger {adjustedActionID} for {stackExecutionWindow.TotalMilliseconds:F0}ms.");
                     break;
+                }
+                
+                if (!stackMatched)
+                {
+                    DalamudApi.LogDebug($"[ActionStacksEX] No stack matched for action {adjustedActionID}");
                 }
             }
 
             PostActionStack?.Invoke(actionManager, actionType, actionID, finalActionID, ref targetObjectID, param, useType, pvp);
 
+            DalamudApi.LogDebug($"[ActionStacksEX] Executing action: Type={actionType}, ID={actionID}, Target={targetObjectID}, Succeeded={succeeded}");
             var result = Game.UseActionHook.Original(actionManager, actionType, actionID, targetObjectID, param, useType, pvp, isGroundTarget);
 
             if (succeeded && useType == 0 && result == 0)
@@ -109,6 +207,16 @@ public static unsafe class ActionStackManager
             if (ActionStacksEX.Config.EnableInstantGroundTarget && !succeeded && queuedGroundTargetObjectID == 0)
                 SetInstantGroundTarget(actionManager, actionType, useType);
 
+            DalamudApi.LogDebug($"[ActionStacksEX] OnUseAction returning: result={result}, succeeded={succeeded}");
+            
+            // Track execution only when a stack succeeded (prevents duplicate stack casts, not normal rotation)
+            if (succeeded && result != 0)
+            {
+                lastExecutedAction = adjustedActionID; // Track the ORIGINAL trigger action
+                lastExecutionTime = DateTime.Now;
+                DalamudApi.LogDebug($"[ActionStacksEX] Tracked stack execution: Trigger={adjustedActionID}, Executed={actionID}");
+            }
+            
             return result;
         }
         catch (Exception e)
@@ -127,6 +235,128 @@ public static unsafe class ActionStackManager
         return keys;
     }
 
+    private static bool MatchesStackTrigger(ActionManager* actionManager, Configuration.ActionStack stack, uint adjustedActionID, Lumina.Excel.Sheets.Action triggerAction)
+    {
+        if (stack.TriggerAction != 0)
+        {
+            var triggerToCheck = stack.UseAdjustedTrigger
+                ? actionManager->CS.GetAdjustedActionId(stack.TriggerAction)
+                : stack.TriggerAction;
+            return triggerToCheck == adjustedActionID;
+        }
+
+        if (stack.Actions.Count > 0)
+        {
+            return stack.Actions.Any(action
+                => action.ID == 0
+                   || action.ID == 1 && triggerAction.CanTargetHostile
+                   || action.ID == 2 && (triggerAction.CanTargetAlly || triggerAction.CanTargetParty)
+                   || (action.UseAdjustedID ? actionManager->CS.GetAdjustedActionId(action.ID) : action.ID) == adjustedActionID);
+        }
+
+        return stack.Items.Any(item => item.ID != 0 && actionManager->CS.GetAdjustedActionId(item.ID) == adjustedActionID);
+    }
+
+    public static bool TryPrepareStackAction(uint actionID, ulong targetObjectID, out uint action, out ulong target, out string stackName)
+    {
+        action = actionID;
+        target = targetObjectID;
+        stackName = string.Empty;
+
+        var actionManager = Common.ActionManager;
+        var adjustedActionID = actionManager->CS.GetAdjustedActionId(actionID);
+        if (!TryResolveStackAction(actionManager, adjustedActionID, out action, out target, out stackName, out var triggerActionID))
+            return false;
+
+        preparedActionID = action;
+        preparedAdjustedActionID = actionManager->CS.GetAdjustedActionId(action);
+        preparedTargetObjectID = target;
+        preparedUntil = Environment.TickCount64 + PreparedActionWindowMs;
+
+        var now = DateTime.Now;
+        lastStackExecution[stackName] = now;
+        lastExecutedAction = triggerActionID;
+        lastExecutionTime = now;
+        currentlyExecutingStack = stackName;
+        lockedTriggerAction = triggerActionID;
+        stackExecutionStart = now;
+        DalamudApi.LogDebug($"[ActionStacksEX] IPC prepare consumed one stack attempt for '{stackName}': trigger={triggerActionID}, action={action}, target={target:X}, locked for {stackExecutionWindow.TotalMilliseconds:F0}ms.");
+        return true;
+    }
+
+    private static bool TryResolveStackAction(ActionManager* actionManager, uint adjustedActionID, out uint action, out ulong target, out string stackName, out uint triggerActionID)
+    {
+        action = adjustedActionID;
+        target = Game.InvalidObjectID;
+        stackName = string.Empty;
+        triggerActionID = adjustedActionID;
+
+        if (!PluginModuleManager.GetModule<Modules.ActionStacks>().IsValid ||
+            !ActionStacksEX.actionSheet.TryGetValue(adjustedActionID, out var triggerAction))
+            return false;
+
+        var modifierKeys = GetModifierKeys();
+        foreach (var stack in ActionStacksEX.Config.ActionStacks)
+        {
+            var exactMatch = (stack.ModifierKeys & 8) != 0;
+            if (exactMatch ? stack.ModifierKeys != modifierKeys : (stack.ModifierKeys & modifierKeys) != stack.ModifierKeys) continue;
+            if (!MatchesStackTrigger(actionManager, stack, adjustedActionID, triggerAction)) continue;
+
+            if (lastStackExecution.TryGetValue(stack.Name, out var lastExec) &&
+                DateTime.Now - lastExec < stackExecutionWindow)
+                return false;
+
+            if (adjustedActionID == lastExecutedAction &&
+                DateTime.Now - lastExecutionTime < TimeSpan.FromMilliseconds(100))
+                return false;
+
+            if (!CheckActionStack(actionManager, adjustedActionID, stack, 0, out action, out target))
+                return false;
+
+            stackName = stack.Name;
+            triggerActionID = adjustedActionID;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool ShouldBypassPreparedAction(uint actionID, uint adjustedActionID, ulong targetObjectID)
+    {
+        if (preparedActionID == 0)
+            return false;
+
+        if (Environment.TickCount64 > preparedUntil)
+        {
+            ClearPreparedAction();
+            return false;
+        }
+
+        var actionMatches = preparedActionID == actionID ||
+                            preparedActionID == adjustedActionID ||
+                            preparedAdjustedActionID == adjustedActionID;
+        var targetMatches = preparedTargetObjectID == targetObjectID ||
+                            preparedTargetObjectID is 0 or Game.InvalidObjectID ||
+                            targetObjectID is 0 or Game.InvalidObjectID;
+
+        if (!actionMatches || !targetMatches)
+        {
+            DalamudApi.LogDebug($"[ActionStacksEX] Prepared bypass did not match: prepared={preparedActionID}/{preparedAdjustedActionID} target={preparedTargetObjectID:X}, incoming={actionID}/{adjustedActionID} target={targetObjectID:X}.");
+            return false;
+        }
+
+        ClearPreparedAction();
+        return true;
+    }
+
+    private static void ClearPreparedAction()
+    {
+        preparedActionID = 0;
+        preparedAdjustedActionID = 0;
+        preparedTargetObjectID = Game.InvalidObjectID;
+        preparedUntil = 0;
+    }
+
     private static bool CheckActionStack(ActionManager* actionManager, uint id, Configuration.ActionStack stack, uint useType, out uint action, out ulong target)
     {
         action = 0;
@@ -134,11 +364,17 @@ public static unsafe class ActionStackManager
 
         var useRange = stack.CheckRange;
         var useCooldown = stack.CheckCooldown;
+        DalamudApi.LogDebug($"[ActionStacksEX] Checking stack '{stack.Name}' with {stack.Items.Count} items");
         foreach (var item in stack.Items)
         {
-            if (!item.Enabled) continue;
+            if (!item.Enabled) 
+            {
+                DalamudApi.LogDebug($"[ActionStacksEX] Item {item.ID} is disabled, skipping");
+                continue;
+            }
 
             var newID = item.ID != 0 ? actionManager->CS.GetAdjustedActionId(item.ID) : id;
+            DalamudApi.LogDebug($"[ActionStacksEX] Checking item: AdjustedID={newID}, TargetID={item.TargetID}, Enabled={item.Enabled}");
             var newTarget = PronounManager.GetGameObjectFromID(item.TargetID);
             if (newTarget == null)
             {
@@ -166,19 +402,14 @@ public static unsafe class ActionStackManager
             
             if (newTarget == null)
             {
-                // Only log failure if it's a specific target type we expect to exist (like Party 1-4)
-                // item.TargetID 43-46 are Party 1-4.
-                if (item.TargetID >= 43 && item.TargetID <= 46)
-                {
-                    DalamudApi.LogDebug($"[ActionStacksEX] Failed to find target for item {item.ID} (TargetID: {item.TargetID})");
-                }
+                DalamudApi.LogDebug($"[ActionStacksEX] Item {newID}: No target found for TargetID {item.TargetID}, continuing to next item");
                 continue;
             }
 
             if (!ActionStacksEX.actionSheet.TryGetValue(newID, out var actionData)) continue;
 
             // Check if player is high enough level for this action (handles level sync dungeons)
-            var localPlayer = DalamudApi.ClientState.LocalPlayer;
+            var localPlayer = DalamudApi.ObjectTable.LocalPlayer;
             if (localPlayer != null && actionData.ClassJobLevel > localPlayer.Level)
             {
                 DalamudApi.LogDebug($"[ActionStacksEX] Skipping {newID} - requires level {actionData.ClassJobLevel}, player is level {localPlayer.Level}");
@@ -249,13 +480,13 @@ public static unsafe class ActionStackManager
                             float remaining = total - elapsed;
 
                             bool isGCD = actionData.ActionCategory.RowId is 1 or 2;
-                            bool isCasting = DalamudApi.ClientState.LocalPlayer!.IsCasting;
+                            bool isCasting = DalamudApi.ObjectTable.LocalPlayer!.IsCasting;
 
                             // If we are casting, we generally cannot use oGCDs (unless it's late weave? But game rejects "UseAction" for oGCD during cast bar).
                             // If !isGCD and isCasting, we should likely SKIP this action to let the stack find something else, or let the original GCD queue.
                             if (!isGCD && isCasting)
                             {
-                                DalamudApi.LogDebug($"[ActionStacksEX] Skipping {newID} (oGCD) because player IsCasting");
+                                DalamudApi.LogDebug($"[ActionStacksEX] Item {newID} (oGCD) skipped - player is casting. Will try next item.");
                                 cdCheckPassed = false;
                             }
                             // If it's a GCD and we're NOT casting, OR it's an oGCD:
@@ -292,9 +523,11 @@ public static unsafe class ActionStackManager
 
             action = newID;
             target = Game.GetObjectID(newTarget);
+            DalamudApi.LogDebug($"[ActionStacksEX] Found valid item: Action={newID}, Target={target}");
             return true;
         }
 
+        DalamudApi.LogDebug($"[ActionStacksEX] Stack '{stack.Name}': All {stack.Items.Count} items checked, none valid. Stack will not execute.");
         return false;
     }
 

@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "project": "actionstacksex",
+  "profile": "dotnet-dalamud",
+  "paths": {
+    "report_dir": "icm/stages/04-verify/output",
+    "run_dir": ".quality-gate/runs",
+    "log_dir": ".quality-gate/logs"
+  },
+  "levels": {
+    "smoke": {
+      "required": ["changed-files"]
+    },
+    "normal": {
+      "required": ["changed-files", "build"],
+      "conditional": ["markdown-audit-if-docs-changed"]
+    },
+    "release": {
+      "required": ["changed-files", "build", "test-hack-detector"]
+    }
+  },
+  "commands": {
+    "build": {
+      "shell": "powershell",
+      "command": "dotnet build .\\ActionStacksEX.csproj -c Release",
+      "timeout_seconds": 240
+    },
+    "test": {
+      "shell": "powershell",
+      "command": "",
+      "timeout_seconds": 0,
+      "skip_reason": "No ActionStacksEX test runner is configured yet."
+    },
+    "markdown-audit": {
+      "shell": "powershell",
+      "command": "python C:\\Users\\kruil\\.codex\\skills\\obsidian-markdown-auditor\\scripts\\obsidian_markdown_audit.py validate --root C:\\Users\\kruil\\Documents\\Projects --stage stage2",
+      "timeout_seconds": 240
+    }
+  },
+  "changed_file_rules": {
+    "docs": {
+      "patterns": ["**/*.md"],
+      "checks": ["markdown-audit-if-docs-changed"]
+    },
+    "plugin": {
+      "patterns": [
+        "**/*.cs",
+        "ActionStacksEX.csproj",
+        "ActionStacksEX.json",
+        "packages.lock.json"
+      ],
+      "risk": "plugin-critical"
+    },
+    "gate": {
+      "patterns": [
+        "quality-gate.json",
+        "AGENTS.md",
+        "*.csproj",
+        "Directory.Build.props",
+        "Directory.Build.targets",
+        "global.json",
+        ".codex/**",
+        ".agents/**"
+      ],
+      "risk": "gate-critical"
+    }
+  },
+  "exceptions": {
+    "allow_with_expiry": true,
+    "max_days": 14
+  }
+}

@@ -1,3 +1,13 @@
+---
+tags:
+  - type/readme
+  - project/actionstacksex
+  - status/active
+type: readme
+project: actionstacksex
+status: active
+aliases: []
+---
 # ActionStacksEX
 
 [![Dalamud API](https://img.shields.io/badge/Dalamud%20API-14-blue)](https://dalamud.dev/)

@@ -56,7 +56,10 @@ public abstract class DalamudPlugin : IDisposable
                 DalamudApi.PluginInterface.UiBuilder.Draw += Draw;
 
             if (derivedType.DeclaresMethod(nameof(ToggleConfig)))
+            {
                 DalamudApi.PluginInterface.UiBuilder.OpenConfigUi += ToggleConfig;
+                DalamudApi.PluginInterface.UiBuilder.OpenMainUi += ToggleConfig;
+            }
 
             Hypostasis.State = Hypostasis.PluginState.Loaded;
 
@@ -104,6 +107,7 @@ public abstract class DalamudPlugin : IDisposable
         DalamudApi.Framework.Update -= Update;
         DalamudApi.PluginInterface.UiBuilder.Draw -= Draw;
         DalamudApi.PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfig;
+        DalamudApi.PluginInterface.UiBuilder.OpenMainUi -= ToggleConfig;
 
         try
         {
