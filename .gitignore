@@ -17,3 +17,6 @@ packages/
 # Local dev
 *.local.md
 .worktrees/
+
+# Windows reserved device names (accidental `> nul` creates these)
+nul

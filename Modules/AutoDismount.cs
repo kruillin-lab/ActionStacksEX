@@ -20,7 +20,7 @@ public class AutoDismount : PluginModule
     private unsafe void PreActionStack(ActionManager* actionManager, ref uint actionType, ref uint actionID, ref uint adjustedActionID, ref ulong targetObjectID, ref uint param, uint useType, ref int pvp, out bool? ret)
     {
         ret = null;
-        if (!ActionStacksEX.Config.EnableAutoDismount || actionType != 1 || useType != 1 || DalamudApi.ClientState.LocalPlayer == null) return;
+        if (!ActionStacksEX.Config.EnableAutoDismount || actionType != 1 || useType != 1 || DalamudApi.ObjectTable.LocalPlayer == null) return;
 
         // Use Condition check for Mounting as it's the most reliable in Dalamud
         if (!DalamudApi.Condition[ConditionFlag.Mounted]) return;

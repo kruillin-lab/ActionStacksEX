@@ -141,7 +141,7 @@ public static unsafe class Common
         
         // Fallback for Trust dungeons: scan ObjectTable for allied BattleCharacters
         // If we only found ourselves (or nobody), look for Trust NPCs
-        if (addresses.Count <= 1 && DalamudApi.ClientState.LocalPlayer is { } player)
+        if (addresses.Count <= 1 && DalamudApi.ObjectTable.LocalPlayer is { } player)
         {
             DalamudApi.LogInfo($"[ActionStacksEX] Scanning ObjectTable for Trusts. Initial count: {addresses.Count}");
             foreach (var obj in DalamudApi.ObjectTable)

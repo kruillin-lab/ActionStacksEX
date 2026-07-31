@@ -218,7 +218,7 @@ public static class PluginUI
 
     private static void DrawStackEditorLists(Configuration.ActionStack stack)
     {
-        DrawActionEditor(stack);
+        DrawTriggerEditor(stack);
         DrawItemEditor(stack);
     }
 
@@ -248,62 +248,35 @@ public static class PluginUI
         FilteredSheet = ActionStacksEX.statusSheet.Select(kv => kv.Value)
     };
 
-    private static void DrawActionEditor(Configuration.ActionStack stack)
+    private static void DrawTriggerEditor(Configuration.ActionStack stack)
     {
         var contentRegion = ImGui.GetContentRegionAvail();
-        ImGui.BeginChild("ActionStacksEXActionEditor", contentRegion with { Y = contentRegion.Y / 2 }, true);
+        ImGui.BeginChild("ActionStacksEXTriggerEditor", contentRegion with { Y = contentRegion.Y / 2 }, true);
 
-        var buttonWidth = ImGui.GetContentRegionAvail().X / 2;
-        var buttonIndent = 0f;
-        for (int i = 0; i < stack.Actions.Count; i++)
+        ImGui.Text("Trigger Action");
+        ImGuiEx.SetItemTooltip("When this action is used, the stack will execute and try each item below.");
+
+        var triggerActionId = stack.TriggerAction;
+        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - 120);
+        if (ImGuiEx.ExcelSheetCombo("##TriggerAction", ref triggerActionId, actionComboOptions))
         {
-            using var _ = ImGuiEx.IDBlock.Begin(i);
-            var action = stack.Actions[i];
-
-            ImGui.Button("≡");
-            if (ImGuiEx.IsItemDraggedDelta(action, ImGuiMouseButton.Left, ImGui.GetFrameHeightWithSpacing(), false, out var dt) && dt.Y != 0)
-                stack.Actions.Shift(i, dt.Y);
-
-            if (i == 0)
-                buttonIndent = ImGui.GetItemRectSize().X + ImGui.GetStyle().ItemSpacing.X;
-
-            ImGui.SameLine();
-
-            ImGui.SetNextItemWidth(buttonWidth);
-            if (ImGuiEx.ExcelSheetCombo("##Action", ref action.ID, actionComboOptions))
-                ActionStacksEX.Config.Save();
-
-            ImGui.SameLine();
-
-            if (ImGui.Checkbox("Adjust ID", ref action.UseAdjustedID))
-                ActionStacksEX.Config.Save();
-            var detectedAdjustment = false;
-            unsafe
-            {
-                if (!action.UseAdjustedID && (detectedAdjustment = Common.ActionManager->CS.GetAdjustedActionId(action.ID) != action.ID))
-                    ImGui.GetWindowDrawList().AddRectFilled(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), 0x2000FF30, ImGui.GetStyle().FrameRounding);
-            }
-            ImGuiEx.SetItemTooltip("Allows the action to match any other action that it transforms into."
-                +"\nE.g. Aero will match Dia, Play will match all cards, Diagnosis will match Eukrasian Diagnosis, etc."
-                +"\nEnable this for skills that upgrade. Disable this for compatibility with certain XIVCombos."
-                + (detectedAdjustment ? "\n\nThis action is currently adjusted due to a trait, combo or plugin. This option is recommended." : string.Empty));
-
-            ImGui.SameLine();
-
-            if (!ImGuiEx.DeleteConfirmationButton()) continue;
-            stack.Actions.RemoveAt(i);
+            stack.TriggerAction = triggerActionId;
             ActionStacksEX.Config.Save();
         }
 
-        using (ImGuiEx.IndentBlock.Begin(buttonIndent))
+        ImGui.SameLine();
+
+        if (ImGui.Checkbox("Adjust##Trigger", ref stack.UseAdjustedTrigger))
+            ActionStacksEX.Config.Save();
+        var detectedAdjustment = false;
+        unsafe
         {
-            ImGuiEx.FontButton(FontAwesomeIcon.Plus.ToIconString(), UiBuilder.IconFont, new Vector2(buttonWidth, 0));
-            if (ImGuiEx.ExcelSheetPopup("ActionStacksEXAddSkillsPopup", out var row, actionPopupOptions))
-            {
-                stack.Actions.Add(new() { ID = row });
-                ActionStacksEX.Config.Save();
-            }
+            if (!stack.UseAdjustedTrigger && triggerActionId != 0 && (detectedAdjustment = Common.ActionManager->CS.GetAdjustedActionId(triggerActionId) != triggerActionId))
+                ImGui.GetWindowDrawList().AddRectFilled(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), 0x2000FF30, ImGui.GetStyle().FrameRounding);
         }
+        ImGuiEx.SetItemTooltip("Allows the trigger to match any action it transforms into."
+            +"\nE.g. If Cure is set as trigger, it will also trigger when Cure II is used (if Cure upgrades to Cure II)."
+            + (detectedAdjustment ? "\n\nThis action is currently adjusted. Enabling this is recommended." : string.Empty));
 
         ImGui.EndChild();
     }
@@ -820,15 +793,11 @@ public static class PluginUI
 
         ImGui.Separator();
 
-        ImGui.Text("Editing a Stack's Actions");
+        ImGui.Text("Setting the Trigger Action");
         ImGui.Indent();
-        ImGui.TextWrapped("The top right pane is where you can add actions, click the + to bring up a box that you can search for them through. " +
-            "After adding every action that you would like to change the functionality of, you can additionally select which ones you would like to " +
-            "\"adjust\". This means that the selected action will match any other one that replaces it on the hotbar. This can be due to a trait " +
-            "(Holy <-> Holy III), a buff (Play -> The Balance) or another plugin (XIVCombo). An example case where you might want it off is when the " +
-            "adjusted action has a separate use case, such as XIVCombo turning Play into Draw. You can change the functionality of the individual " +
-            "cards while not affecting Draw by adding each of them to the list. Additionally, if the action is currently adjusted by the game, the " +
-            "option will be highlighted in green as an indicator.");
+        ImGui.TextWrapped("The top right pane is where you set the trigger action. This is the single action that will activate the stack when used. " +
+            "When you use this action in-game, the stack will execute and try each item in the stack (bottom pane) in order until one succeeds. " +
+            "You can also enable \"Adjust\" to make the trigger match upgraded versions of the action (e.g., Cure will also trigger when Cure II is used).");
         ImGui.Unindent();
 
         ImGui.Separator();
@@ -845,10 +814,9 @@ public static class PluginUI
 
         ImGui.Text("Stack Priority");
         ImGui.Indent();
-        ImGui.TextWrapped("The executed stack will depend on which one, from top to bottom, first contains the action being used and has its modifier " +
-            "keys held. If you would like to use \"All Actions\" in a stack, you can utilize this to add overrides above it in the list. Note that a stack " +
-            "does not need to contain any functionality in the event that you would like for a set of actions to never be changed by \"All Actions\" and " +
-            "instead use the original.");
+        ImGui.TextWrapped("The executed stack will depend on which one, from top to bottom, first matches the trigger action being used and has its modifier " +
+            "keys held. Each stack only needs ONE trigger action set. When that action is used, the stack activates and tries each item in order. " +
+            "If no item in the stack can be executed, the original trigger action will be used normally.");
         ImGui.Unindent();
     }
 }

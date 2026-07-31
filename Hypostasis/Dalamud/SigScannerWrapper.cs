@@ -315,7 +315,13 @@ public class SigScannerWrapper(ISigScanner s) : IDisposable
             }
         }
 
-        var hook = type.GetMethod("FromAddress", BindingFlags.Static | BindingFlags.NonPublic)?.Invoke(null, [ address, detour, false ]);
+        var fromAddress = type.GetMethod("FromAddress", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        var hook = fromAddress?.GetParameters().Length switch
+        {
+            4 => fromAddress.Invoke(null, [ address, detour, false, ownerType.Assembly ]),
+            3 => fromAddress.Invoke(null, [ address, detour, false ]),
+            _ => throw new ApplicationException($"Unsupported hook factory signature for {type.FullName}.")
+        };
         assignableInfo.SetValue(hook);
 
         if (attribute.EnableHook)
