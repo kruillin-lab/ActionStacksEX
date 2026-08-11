@@ -267,19 +267,25 @@ public static unsafe class ActionStackManager
         var useRange = stack.CheckRange;
         var useCooldown = stack.CheckCooldown;
         DalamudApi.LogDebug($"[ActionStacksEX] Checking stack '{stack.Name}' with {stack.Items.Count} items");
-        foreach (var item in stack.Items)
+        for (var itemIndex = 0; itemIndex < stack.Items.Count; itemIndex++)
         {
+            var item = stack.Items[itemIndex];
+
             if (!item.Enabled)
             {
                 DalamudApi.LogDebug($"[ActionStacksEX] Item {item.ID} is disabled, skipping");
                 if (XRay.Capturing)
-                    XRay.AddStep(XRay.StepKind.Info, $"{XRay.ActionName(item.ID != 0 ? item.ID : id)} → <{PronounManager.GetPronounName(item.TargetID)}>", "item disabled — skipped");
+                    XRay.AddStep(XRay.StepKind.Info, $"#{itemIndex + 1} {XRay.ActionName(item.ID != 0 ? item.ID : id)} → <{PronounManager.GetPronounName(item.TargetID)}>", "item disabled — skipped");
                 continue;
             }
 
             var newID = item.ID != 0 ? actionManager->CS.GetAdjustedActionId(item.ID) : id;
             DalamudApi.LogDebug($"[ActionStacksEX] Checking item: AdjustedID={newID}, TargetID={item.TargetID}, Enabled={item.Enabled}");
-            var xl = XRay.Capturing ? $"{XRay.ActionName(newID)} → <{PronounManager.GetPronounName(item.TargetID)}>" : null;
+            // "[trigger]" marks an item with no action set: it re-uses the trigger's adjusted
+            // ID, so it renders identically to an explicit item for the same action.
+            var xl = XRay.Capturing
+                ? $"#{itemIndex + 1} {XRay.ActionName(newID)}{(item.ID == 0 ? " [trigger]" : string.Empty)} → <{PronounManager.GetPronounName(item.TargetID)}>"
+                : null;
             var newTarget = PronounManager.GetGameObjectFromID(item.TargetID);
             if (newTarget == null)
             {
