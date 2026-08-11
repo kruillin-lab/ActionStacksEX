@@ -20,8 +20,31 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
         public uint TargetID = 10_000;
         public bool Enabled = true;
         public float HpRatio = 1.0f;
-        public uint StatusID = 0;
+
+        /// <summary>
+        /// Statuses this item checks, matched any-of. With <see cref="MissingStatus"/> the item
+        /// requires none of them present; otherwise it requires at least one. Listing the
+        /// level-scaled forms of one buff (Aspected Helios and Helios Conjunction, say) guards
+        /// every sync level, since only the level-appropriate form can ever be applied.
+        /// Empty disables the check.
+        /// </summary>
+        public List<uint> StatusIDs = [];
+
         public bool MissingStatus = false;
+
+        /// <summary>
+        /// Absorbs the pre-list <c>StatusID</c> field so saved configs and previously exported
+        /// stacks keep their check. Write-only, so it is never serialised back out.
+        /// </summary>
+        [JsonProperty("StatusID")]
+        private uint LegacyStatusID
+        {
+            set
+            {
+                if (value != 0 && !StatusIDs.Contains(value))
+                    StatusIDs.Add(value);
+            }
+        }
     }
 
     public class ActionStack

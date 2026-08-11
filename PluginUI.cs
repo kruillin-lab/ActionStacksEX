@@ -254,6 +254,9 @@ public static class PluginUI
         FilteredSheet = ActionStacksEX.statusSheet.Select(kv => kv.Value)
     };
 
+    private static string FormatStatusName(uint id)
+        => ActionStacksEX.statusSheet.TryGetValue(id, out var s) ? s.Name.ToString() : $"#{id}";
+
     private static void DrawTriggerEditor(Configuration.ActionStack stack)
     {
         var contentRegion = ImGui.GetContentRegionAvail();
@@ -345,15 +348,56 @@ public static class PluginUI
             ImGui.SameLine();
 
             ImGui.SetNextItemWidth(buttonWidth / 2);
-            if (ImGuiEx.ExcelSheetCombo("##StatusID", ref item.StatusID, statusComboOptions))
-                ActionStacksEX.Config.Save();
-            ImGuiEx.SetItemTooltip("Status ID check. Set to 0 to disable.");
+            var statusLabel = item.StatusIDs.Count switch
+            {
+                0 => "No status",
+                1 => FormatStatusName(item.StatusIDs[0]),
+                _ => $"{item.StatusIDs.Count} statuses"
+            };
+            if (ImGui.Button($"{statusLabel}##StatusList", new Vector2(buttonWidth / 2, 0)))
+                ImGui.OpenPopup("StatusList");
+            ImGuiEx.SetItemTooltip("Statuses this item checks, matched any-of. Click to edit; empty disables the check.\n" +
+                "List the level-scaled forms of one buff (e.g. Aspected Helios and Helios Conjunction)\n" +
+                "to guard correctly at every sync level.");
+
+            if (ImGui.BeginPopup("StatusList"))
+            {
+                for (var s = 0; s < item.StatusIDs.Count; s++)
+                {
+                    using var statusId = ImGuiEx.IDBlock.Begin(s);
+                    if (ImGui.Button("x"))
+                    {
+                        item.StatusIDs.RemoveAt(s);
+                        ActionStacksEX.Config.Save();
+                        break; // list mutated, resume next frame
+                    }
+                    ImGui.SameLine();
+                    ImGui.TextUnformatted(FormatStatusName(item.StatusIDs[s]));
+                }
+
+                if (item.StatusIDs.Count > 0)
+                    ImGui.Separator();
+
+                ImGui.TextUnformatted("Add");
+                ImGui.SameLine();
+                ImGui.SetNextItemWidth(320 * ImGuiHelpers.GlobalScale);
+                var statusToAdd = 0u;
+                if (ImGuiEx.ExcelSheetCombo("##AddStatus", ref statusToAdd, statusComboOptions)
+                    && statusToAdd != 0 && !item.StatusIDs.Contains(statusToAdd))
+                {
+                    item.StatusIDs.Add(statusToAdd);
+                    ActionStacksEX.Config.Save();
+                }
+
+                ImGui.EndPopup();
+            }
 
             ImGui.SameLine();
 
             if (ImGui.Checkbox("##MissingStatus", ref item.MissingStatus))
                 ActionStacksEX.Config.Save();
-            ImGuiEx.SetItemTooltip("If checked, item will only trigger if the target is MISSING the status.");
+            ImGuiEx.SetItemTooltip("Ticked: the item only triggers if the target has NONE of the listed statuses.\n" +
+                "Unticked: it only triggers if the target has at least ONE of them.");
 
             ImGui.SameLine();
 

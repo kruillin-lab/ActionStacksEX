@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
 
@@ -92,6 +93,9 @@ public static unsafe class XRay
 
     public static string ActionName(uint id)
         => ActionStacksEX.actionSheet != null && ActionStacksEX.actionSheet.TryGetValue(id, out var a) ? $"{a.Name} ({id})" : $"#{id}";
+
+    public static string StatusNames(IReadOnlyList<uint> ids)
+        => ids.Count == 0 ? "<none>" : string.Join(" / ", ids.Select(StatusName));
 
     public static string StatusName(uint id)
         => ActionStacksEX.statusSheet != null && ActionStacksEX.statusSheet.TryGetValue(id, out var s) ? $"{s.Name} ({id})" : $"#{id}";

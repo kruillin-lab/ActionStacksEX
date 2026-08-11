@@ -365,24 +365,34 @@ public static unsafe class ActionStackManager
                 }
             }
 
-            if (item.StatusID != 0)
+            if (item.StatusIDs.Count > 0)
             {
                 var statusManager = Extensions.GetStatusManager(newTarget);
-                bool hasStatus = statusManager != null && statusManager->HasStatus(item.StatusID);
-                if (item.MissingStatus && hasStatus)
+                uint present = 0;
+                if (statusManager != null)
                 {
-                    if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)} has {XRay.StatusName(item.StatusID)} (required missing)");
+                    foreach (var statusID in item.StatusIDs)
+                    {
+                        if (statusID == 0 || !statusManager->HasStatus(statusID)) continue;
+                        present = statusID;
+                        break;
+                    }
+                }
+
+                if (item.MissingStatus && present != 0)
+                {
+                    if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)} has {XRay.StatusName(present)} (required missing)");
                     continue;
                 }
-                if (!item.MissingStatus && !hasStatus)
+                if (!item.MissingStatus && present == 0)
                 {
-                    if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)} missing {XRay.StatusName(item.StatusID)} (required present)");
+                    if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)} has none of {XRay.StatusNames(item.StatusIDs)} (required present)");
                     continue;
                 }
             }
             else if (item.MissingStatus && xl != null)
             {
-                XRay.AddStep(XRay.StepKind.Info, xl, "status check ignored — \"missing status\" is ticked but no status is selected");
+                XRay.AddStep(XRay.StepKind.Info, xl, "status check ignored — \"missing status\" is ticked but no statuses are listed");
             }
 
             if (useRange && Game.IsActionOutOfRange(newID, newTarget))
