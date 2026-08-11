@@ -34,7 +34,7 @@ public static class PluginUI
         if (!isVisible) return;
 
         ImGui.SetNextWindowSizeConstraints(new Vector2(700, 600) * ImGuiHelpers.GlobalScale, new Vector2(9999));
-        ImGui.Begin("ActionStacksEX Configuration", ref isVisible);
+        ImGui.Begin("ActionStacks(OMP) Configuration", ref isVisible);
         ImGuiEx.AddDonationHeader();
 
         if (ImGui.BeginTabBar("ActionStacksEXTabs"))
@@ -56,6 +56,12 @@ public static class PluginUI
             if (ImGui.BeginTabItem("Custom Placeholders"))
             {
                 DrawCustomPlaceholders();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("X-Ray"))
+            {
+                DrawXRay();
                 ImGui.EndTabItem();
             }
 
@@ -818,5 +824,71 @@ public static class PluginUI
             "keys held. Each stack only needs ONE trigger action set. When that action is used, the stack activates and tries each item in order. " +
             "If no item in the stack can be executed, the original trigger action will be used normally.");
         ImGui.Unindent();
+    }
+
+    private static readonly Vector4 xrayPassColor = new(0.35f, 1f, 0.45f, 1f);
+    private static readonly Vector4 xrayFailColor = new(1f, 0.4f, 0.4f, 1f);
+    private static readonly Vector4 xrayInfoColor = new(0.65f, 0.65f, 0.65f, 1f);
+    private static readonly Vector4 xrayRedirectColor = new(1f, 0.85f, 0.3f, 1f);
+
+    private static Vector4 XRayColor(XRay.StepKind kind) => kind switch
+    {
+        XRay.StepKind.Pass => xrayPassColor,
+        XRay.StepKind.Fail => xrayFailColor,
+        XRay.StepKind.Redirect => xrayRedirectColor,
+        _ => xrayInfoColor
+    };
+
+    private static void DrawXRay()
+    {
+        ImGui.Checkbox("Capture", ref XRay.Capturing);
+        ImGuiEx.SetItemTooltip("Records a decision trace for every stack evaluation while enabled. Zero overhead when off.");
+        ImGui.SameLine();
+        using (ImGuiEx.DisabledBlock.Begin(!XRay.Capturing))
+            ImGui.Checkbox("Dry run", ref XRay.DryRun);
+        ImGuiEx.SetItemTooltip("Evaluate stacks and record the trace, but do NOT redirect actions. Requires capture.");
+        ImGui.SameLine();
+        if (ImGui.Button("Clear"))
+            XRay.Clear();
+        ImGui.SameLine();
+        if (ImGui.Button("Copy Trace"))
+            ImGui.SetClipboardText(XRay.Dump());
+        ImGuiEx.SetItemTooltip("Copies the whole buffer as plain text for bug reports or sharing.");
+        ImGui.SameLine();
+        ImGui.TextDisabled($"{XRay.Buffer.Count}/{XRay.Capacity} evaluations (newest first)");
+
+        ImGui.Separator();
+
+        if (XRay.Buffer.Count == 0)
+        {
+            ImGui.TextWrapped(XRay.Capturing
+                ? "Waiting for stack evaluations... use a trigger action in-game."
+                : "Enable Capture, then use your trigger actions in-game. Each press shows exactly which stacks were considered, which conditions passed or failed (with observed values), and why the action was redirected, blocked, or passed through.");
+            return;
+        }
+
+        ImGui.BeginChild("XRayList");
+        var i = 0;
+        foreach (var e in XRay.Buffer)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, XRayColor(e.OutcomeKind));
+            var open = ImGui.TreeNodeEx($"[{e.Time:HH:mm:ss.fff}] {e.TriggerName} — {e.Outcome}{(e.DryRun ? " [DRY-RUN]" : string.Empty)}###xray{i}");
+            ImGui.PopStyleColor();
+            if (open)
+            {
+                ImGui.TextColored(xrayInfoColor, $"Modifiers held: {XRay.Mods(e.ModifierKeys)}");
+                foreach (var s in e.Steps)
+                {
+                    ImGui.TextColored(XRayColor(s.Kind), $"  [{s.Kind}]");
+                    ImGui.SameLine();
+                    ImGui.TextWrapped(string.IsNullOrEmpty(s.Detail) ? s.Label : $"{s.Label}: {s.Detail}");
+                }
+                if (e.Steps.Count == 0)
+                    ImGui.TextColored(xrayInfoColor, "  (no steps recorded)");
+                ImGui.TreePop();
+            }
+            i++;
+        }
+        ImGui.EndChild();
     }
 }

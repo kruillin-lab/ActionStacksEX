@@ -62,6 +62,12 @@ public static unsafe class ActionStackManager
                     if (adjustedActionID == lockedTriggerAction)
                     {
                         DalamudApi.LogDebug($"[ActionStacksEX] Blocking trigger {adjustedActionID} - stack '{currentlyExecutingStack}' is executing ({timeSinceExec.TotalMilliseconds:F0}ms ago)");
+                        if (XRay.Capturing)
+                        {
+                            XRay.Begin(adjustedActionID, GetModifierKeys());
+                            XRay.AddStep(XRay.StepKind.Fail, "Execution lock", $"stack '{currentlyExecutingStack}' locked this trigger {timeSinceExec.TotalMilliseconds:F0}ms ago (window {stackExecutionWindow.TotalMilliseconds:F0}ms)");
+                            XRay.Commit(XRay.StepKind.Fail, "Blocked by execution lock");
+                        }
                         return 0; // Block the trigger action completely
                     }
                     DalamudApi.LogDebug($"[ActionStacksEX] Stack '{currentlyExecutingStack}' is executing, but {adjustedActionID} is different trigger. Allowing.");
@@ -90,10 +96,17 @@ public static unsafe class ActionStackManager
             if (PluginModuleManager.GetModule<Modules.ActionStacks>().IsValid && tryStack && actionType == 1 && ActionStacksEX.actionSheet.TryGetValue(adjustedActionID, out var a))
             {
                 var modifierKeys = GetModifierKeys();
+                XRay.Begin(adjustedActionID, modifierKeys);
                 foreach (var stack in ActionStacksEX.Config.ActionStacks)
                 {
                     var exactMatch = (stack.ModifierKeys & 8) != 0;
-                    if (exactMatch ? stack.ModifierKeys != modifierKeys : (stack.ModifierKeys & modifierKeys) != stack.ModifierKeys) continue;
+                    if (exactMatch ? stack.ModifierKeys != modifierKeys : (stack.ModifierKeys & modifierKeys) != stack.ModifierKeys)
+                    {
+                        if (XRay.Capturing && stack.TriggerAction != 0
+                            && (stack.UseAdjustedTrigger ? actionManager->CS.GetAdjustedActionId(stack.TriggerAction) : stack.TriggerAction) == adjustedActionID)
+                            XRay.AddStep(XRay.StepKind.Fail, $"Stack '{stack.Name}'", $"trigger matches but modifiers don't (needs {XRay.Mods(stack.ModifierKeys)}{(exactMatch ? " exactly" : string.Empty)}, held {XRay.Mods(modifierKeys)})");
+                        continue;
+                    }
 
                     // Check if this stack has a trigger action set
                     if (stack.TriggerAction == 0) continue;
@@ -107,6 +120,8 @@ public static unsafe class ActionStackManager
 
                     stackMatched = true;
                     DalamudApi.LogDebug($"[ActionStacksEX] Stack '{stack.Name}' triggered by action {adjustedActionID}");
+                    if (XRay.Capturing)
+                        XRay.AddStep(XRay.StepKind.Info, $"Stack '{stack.Name}'", "trigger matched — evaluating items");
 
                     // Check if this stack was recently executed (prevent multi-casting)
                     if (lastStackExecution.TryGetValue(stack.Name, out var lastExec))
@@ -116,6 +131,8 @@ public static unsafe class ActionStackManager
                         {
                             DalamudApi.LogDebug($"[ActionStacksEX] Stack '{stack.Name}' was executed {timeSinceLastExec.TotalMilliseconds:F0}ms ago, within {stackExecutionWindow.TotalMilliseconds:F0}ms window. Allowing original action.");
                             // Don't block - let the original action execute
+                            if (XRay.Capturing)
+                                XRay.AddStep(XRay.StepKind.Fail, $"Stack '{stack.Name}'", $"anti-multicast: executed {timeSinceLastExec.TotalMilliseconds:F0}ms ago (< {stackExecutionWindow.TotalMilliseconds:F0}ms window) — passing original through");
                             break;
                         }
                     }
@@ -126,6 +143,8 @@ public static unsafe class ActionStackManager
                     {
                         DalamudApi.LogDebug($"[ActionStacksEX] DUPLICATE: Trigger {adjustedActionID} was executed {timeSinceLastAction.TotalMilliseconds:F0}ms ago. Allowing original.");
                         // Don't block rotation - just don't process stack this time
+                        if (XRay.Capturing)
+                            XRay.AddStep(XRay.StepKind.Fail, $"Stack '{stack.Name}'", $"duplicate rapid trigger ({timeSinceLastAction.TotalMilliseconds:F0}ms < 100ms) — passing original through");
                         break;
                     }
 
@@ -134,11 +153,18 @@ public static unsafe class ActionStackManager
                         if (stack.BlockOriginal)
                         {
                             DalamudApi.LogDebug($"[ActionStacksEX] Stack '{stack.Name}' failed and BlockOriginal is true - blocking action");
+                            XRay.Commit(XRay.StepKind.Fail, $"Blocked — no valid item in '{stack.Name}' and BlockOriginal is on");
                             return 0;
                         }
                         // Stack matched but couldn't execute - don't try other stacks, let original action through
                         DalamudApi.LogDebug($"[ActionStacksEX] Stack '{stack.Name}' failed but BlockOriginal is false - allowing original action {actionID}");
                         break;
+                    }
+
+                    if (XRay.DryRunActive)
+                    {
+                        XRay.Commit(XRay.StepKind.Redirect, $"DRY-RUN: would redirect to {XRay.ActionName(newAction)}");
+                        break; // evaluate only — don't apply, lock, or record execution
                     }
 
                     actionID = newAction;
@@ -161,6 +187,11 @@ public static unsafe class ActionStackManager
                 {
                     DalamudApi.LogDebug($"[ActionStacksEX] No stack matched for action {adjustedActionID}");
                 }
+
+                if (succeeded)
+                    XRay.Commit(XRay.StepKind.Redirect, $"Redirected → {XRay.ActionName(finalActionID)}");
+                else
+                    XRay.CommitIfRelevant(XRay.StepKind.Info, stackMatched ? "Passed through original action" : "No stack matched");
             }
 
             PostActionStack?.Invoke(actionManager, actionType, actionID, finalActionID, ref targetObjectID, param, useType, pvp);
@@ -241,11 +272,14 @@ public static unsafe class ActionStackManager
             if (!item.Enabled)
             {
                 DalamudApi.LogDebug($"[ActionStacksEX] Item {item.ID} is disabled, skipping");
+                if (XRay.Capturing)
+                    XRay.AddStep(XRay.StepKind.Info, $"{XRay.ActionName(item.ID != 0 ? item.ID : id)} → <{PronounManager.GetPronounName(item.TargetID)}>", "item disabled — skipped");
                 continue;
             }
 
             var newID = item.ID != 0 ? actionManager->CS.GetAdjustedActionId(item.ID) : id;
             DalamudApi.LogDebug($"[ActionStacksEX] Checking item: AdjustedID={newID}, TargetID={item.TargetID}, Enabled={item.Enabled}");
+            var xl = XRay.Capturing ? $"{XRay.ActionName(newID)} → <{PronounManager.GetPronounName(item.TargetID)}>" : null;
             var newTarget = PronounManager.GetGameObjectFromID(item.TargetID);
             if (newTarget == null)
             {
@@ -274,16 +308,22 @@ public static unsafe class ActionStackManager
             if (newTarget == null)
             {
                 DalamudApi.LogDebug($"[ActionStacksEX] Item {newID}: No target found for TargetID {item.TargetID}, continuing to next item");
+                if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, "target not resolved (pronoun matched nothing)");
                 continue;
             }
 
-            if (!ActionStacksEX.actionSheet.TryGetValue(newID, out var actionData)) continue;
+            if (!ActionStacksEX.actionSheet.TryGetValue(newID, out var actionData))
+            {
+                if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, "action not found in sheet");
+                continue;
+            }
 
             // Check if player is high enough level for this action (handles level sync dungeons)
             var localPlayer = DalamudApi.ObjectTable.LocalPlayer;
             if (localPlayer != null && actionData.ClassJobLevel > localPlayer.Level)
             {
                 DalamudApi.LogDebug($"[ActionStacksEX] Skipping {newID} - requires level {actionData.ClassJobLevel}, player is level {localPlayer.Level}");
+                if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"requires level {actionData.ClassJobLevel}, player is {localPlayer.Level}");
                 continue;
             }
 
@@ -297,6 +337,7 @@ public static unsafe class ActionStackManager
             {
                 if (((Character*)newTarget)->CharacterData.Health == 0 && actionData.ActionCategory.RowId != 15)
                 {
+                    if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)} is dead");
                     continue;
                 }
             }
@@ -304,24 +345,41 @@ public static unsafe class ActionStackManager
             bool targetValid = (canTargetHostile && isEnemy) || (canTargetAlly && !isEnemy) || (canTargetSelf && isSelf) || actionData.TargetArea;
             if (!targetValid)
             {
+                if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)}: action cannot target this object (self={isSelf}, enemy={isEnemy})");
                 continue;
             }
 
             if (item.HpRatio < 1.0f)
             {
                 var hpRatio = Extensions.GetHealthRatio(newTarget);
-                if (hpRatio > item.HpRatio) continue;
+                if (hpRatio > item.HpRatio)
+                {
+                    if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)} HP {hpRatio:P0} above {item.HpRatio:P0} threshold");
+                    continue;
+                }
             }
 
             if (item.StatusID != 0)
             {
                 var statusManager = Extensions.GetStatusManager(newTarget);
                 bool hasStatus = statusManager != null && statusManager->HasStatus(item.StatusID);
-                if (item.MissingStatus && hasStatus) continue;
-                if (!item.MissingStatus && !hasStatus) continue;
+                if (item.MissingStatus && hasStatus)
+                {
+                    if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)} has {XRay.StatusName(item.StatusID)} (required missing)");
+                    continue;
+                }
+                if (!item.MissingStatus && !hasStatus)
+                {
+                    if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)} missing {XRay.StatusName(item.StatusID)} (required present)");
+                    continue;
+                }
             }
 
-            if (useRange && Game.IsActionOutOfRange(newID, newTarget)) continue;
+            if (useRange && Game.IsActionOutOfRange(newID, newTarget))
+            {
+                if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)} out of range");
+                continue;
+            }
 
             // We MUST check recast/casting (true, true) to get status 573/579.
             // If we pass (false, false), GetActionStatus returns 0 (Ready) even if on CD, causing the stack to pick the first item and fail to execute.
@@ -358,6 +416,7 @@ public static unsafe class ActionStackManager
                             if (!isGCD && isCasting)
                             {
                                 DalamudApi.LogDebug($"[ActionStacksEX] Item {newID} (oGCD) skipped - player is casting. Will try next item.");
+                                if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, "oGCD unavailable while casting");
                                 cdCheckPassed = false;
                             }
                             // If it's a GCD and we're NOT casting, OR it's an oGCD:
@@ -369,12 +428,14 @@ public static unsafe class ActionStackManager
                             else
                             {
                                 DalamudApi.LogDebug($"[ActionStacksEX] Skipping {newID} due to CD {remaining:F2}s (Status {status})");
+                                if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"on cooldown, {remaining:F2}s remaining (status {status})");
                             }
                         }
                     }
                     catch (Exception ex)
                     {
                         DalamudApi.LogError($"[ActionStacksEX] Error checking CD/Charges for {newID}: {ex.Message}");
+                        if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"cooldown/charge check errored: {ex.Message}");
                         // On error, behave like original: if status != 0, skip.
                         // But since we are here, status IS != 0.
                         // We'll treat it as 'failed check' to be safe.
@@ -387,6 +448,7 @@ public static unsafe class ActionStackManager
                 {
                     // Other errors (MP, Range, Status, etc) -> Invalid target/action.
                     DalamudApi.LogDebug($"[ActionStacksEX] Skipping {newID} due to Status {status}");
+                    if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"unusable — action status {status}");
                     continue;
                 }
             }
@@ -395,6 +457,7 @@ public static unsafe class ActionStackManager
             action = newID;
             target = Game.GetObjectID(newTarget);
             DalamudApi.LogDebug($"[ActionStacksEX] Found valid item: Action={newID}, Target={target}");
+            if (xl != null) XRay.AddStep(XRay.StepKind.Pass, xl, $"VALID → {XRay.ObjectName(newTarget)}");
             return true;
         }
 
