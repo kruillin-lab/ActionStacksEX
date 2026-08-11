@@ -125,7 +125,7 @@ public static unsafe class XRay
     public static string Dump()
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"ActionStacks(OMP) X-Ray trace — {DateTime.Now:yyyy-MM-dd HH:mm:ss} — {Buffer.Count} evaluation(s), newest first");
+        sb.AppendLine($"ActionStacksEX X-Ray trace — {DateTime.Now:yyyy-MM-dd HH:mm:ss} — {Buffer.Count} evaluation(s), newest first");
         foreach (var e in Buffer)
         {
             sb.AppendLine($"[{e.Time:HH:mm:ss.fff}] {e.TriggerName} (mods held: {Mods(e.ModifierKeys)}){(e.DryRun ? " [DRY-RUN]" : string.Empty)} — {e.Outcome}");

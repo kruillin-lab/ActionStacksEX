@@ -34,7 +34,7 @@ public static class PluginUI
         if (!isVisible) return;
 
         ImGui.SetNextWindowSizeConstraints(new Vector2(700, 600) * ImGuiHelpers.GlobalScale, new Vector2(9999));
-        ImGui.Begin("ActionStacks(OMP) Configuration", ref isVisible);
+        ImGui.Begin("ActionStacksEX Configuration", ref isVisible);
         ImGuiEx.AddDonationHeader();
 
         if (ImGui.BeginTabBar("ActionStacksEXTabs"))
@@ -42,6 +42,12 @@ public static class PluginUI
             if (ImGui.BeginTabItem("Stacks"))
             {
                 DrawStackList();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Pronoun Forge"))
+            {
+                DrawPronounForge();
                 ImGui.EndTabItem();
             }
 
@@ -830,6 +836,181 @@ public static class PluginUI
         }
 
         ImGui.EndTable();
+    }
+
+    private static ForgedPronounDef selectedForgedPronoun;
+
+    private static unsafe void DrawPronounForge()
+    {
+        var config = ActionStacksEX.Config;
+        var save = false;
+
+        ImGui.BeginChild("ForgedPronounList", new Vector2(200 * ImGuiHelpers.GlobalScale, ImGui.GetContentRegionAvail().Y), true);
+
+        ImGui.PushFont(UiBuilder.IconFont);
+        var buttonSize = ImGui.CalcTextSize(FontAwesomeIcon.SignOutAlt.ToIconString()) + ImGui.GetStyle().FramePadding * 2;
+
+        if (ImGui.Button(FontAwesomeIcon.Plus.ToIconString(), buttonSize))
+        {
+            var def = new ForgedPronounDef { ID = config.NextForgedPronounID++ };
+            def.Placeholder = $"<forge{def.ID - PronounForge.MinimumForgedID + 1}>";
+            config.ForgedPronouns.Add(def);
+            selectedForgedPronoun = def;
+            save = true;
+        }
+        ImGui.PopFont();
+        ImGuiEx.SetItemTooltip("Create a new forged pronoun.");
+        ImGui.PushFont(UiBuilder.IconFont);
+
+        ImGui.SameLine();
+
+        if (ImGui.Button(FontAwesomeIcon.SignOutAlt.ToIconString(), buttonSize) && selectedForgedPronoun != null)
+            ImGui.SetClipboardText(Configuration.ExportForgedPronoun(selectedForgedPronoun));
+        ImGui.PopFont();
+        ImGuiEx.SetItemTooltip("Export forged pronoun to clipboard.");
+        ImGui.PushFont(UiBuilder.IconFont);
+
+        ImGui.SameLine();
+
+        if (ImGui.Button(FontAwesomeIcon.SignInAlt.ToIconString(), buttonSize))
+        {
+            try
+            {
+                var def = Configuration.ImportForgedPronoun(ImGui.GetClipboardText());
+                if (def != null)
+                {
+                    def.ID = config.NextForgedPronounID++;
+                    config.ForgedPronouns.Add(def);
+                    selectedForgedPronoun = def;
+                    save = true;
+                }
+            }
+            catch (Exception e)
+            {
+                DalamudApi.PrintError($"Failed to import forged pronoun from clipboard!\n{e.Message}");
+            }
+        }
+        ImGui.PopFont();
+        ImGuiEx.SetItemTooltip("Import forged pronoun from clipboard.");
+
+        ImGui.Separator();
+
+        foreach (var def in config.ForgedPronouns)
+        {
+            if (ImGui.Selectable($"{def.Name}##Forged{def.ID}", selectedForgedPronoun == def))
+                selectedForgedPronoun = def;
+        }
+
+        ImGui.EndChild();
+
+        ImGui.SameLine();
+
+        ImGui.BeginChild("ForgedPronounEditor", ImGui.GetContentRegionAvail(), true);
+
+        if (selectedForgedPronoun is { } cur && config.ForgedPronouns.Contains(cur))
+        {
+            save |= ImGui.InputText("Name", ref cur.Name, 64);
+
+            save |= ImGui.InputText("Placeholder", ref cur.Placeholder, 32);
+            ImGuiEx.SetItemTooltip("Text placeholder usable in macros and text commands, e.g. <myheal>.\nAlso selectable as a stack item target.");
+            if (!string.IsNullOrEmpty(cur.Placeholder) && (!cur.Placeholder.StartsWith('<') || !cur.Placeholder.EndsWith('>')))
+                ImGui.TextColored(new Vector4(1, 0.3f, 0.3f, 1), "Placeholder should look like <name>");
+            else if (!string.IsNullOrEmpty(cur.Placeholder)
+                && PronounManager.CustomPlaceholders.TryGetValue(cur.Placeholder, out var owner)
+                && (owner is not ForgedPronoun f || f.Def != cur))
+                ImGui.TextColored(new Vector4(1, 0.3f, 0.3f, 1), $"Placeholder is already used by \"{owner.Name}\"");
+
+            ImGui.Separator();
+
+            save |= ImGui.Combo("Pool", ref cur.Pool, "Party\0Enemies");
+            ImGuiEx.SetItemTooltip("Candidate pool to search.");
+
+            if (cur.Pool == 0)
+            {
+                save |= ImGui.Combo("Role", ref cur.Role, "Any\0Tank\0Healer\0DPS");
+
+                var job = (int)cur.JobID;
+                if (ImGui.InputInt("Job ID", ref job))
+                {
+                    cur.JobID = (uint)Math.Max(job, 0);
+                    save = true;
+                }
+                ImGuiEx.SetItemTooltip("ClassJob row ID filter, 0 = any job.");
+                if (cur.JobID != 0)
+                {
+                    var jobSheet = DalamudApi.DataManager.GetExcelSheet<ClassJob>();
+                    var jobName = jobSheet?.GetRowOrDefault(cur.JobID)?.Name.ToString();
+                    ImGui.SameLine();
+                    ImGui.TextUnformatted(string.IsNullOrEmpty(jobName) ? "(unknown)" : $"({jobName})");
+                }
+
+                save |= ImGui.Checkbox("Exclude self", ref cur.ExcludeSelf);
+            }
+
+            save |= ImGui.Combo("Life", ref cur.LifeFilter, "Alive only\0Dead only\0Any");
+
+            save |= ImGui.Checkbox("##UseHpFilter", ref cur.UseHpFilter);
+            ImGui.SameLine();
+            if (!cur.UseHpFilter) ImGui.BeginDisabled();
+            save |= ImGui.SliderFloat("Max HP %", ref cur.MaxHpPercent, 0.0f, 1.0f, "%.2f");
+            if (!cur.UseHpFilter) ImGui.EndDisabled();
+            ImGuiEx.SetItemTooltip("Only match candidates at or below this HP fraction.");
+
+            var status = (int)cur.StatusID;
+            if (ImGui.InputInt("Status ID", ref status))
+            {
+                cur.StatusID = (uint)Math.Max(status, 0);
+                save = true;
+            }
+            ImGuiEx.SetItemTooltip("Status effect filter, 0 = ignore.");
+            if (cur.StatusID != 0)
+            {
+                ImGui.SameLine();
+                ImGui.TextUnformatted(ActionStacksEX.statusSheet.TryGetValue(cur.StatusID, out var statusRow) ? $"({statusRow.Name})" : "(unknown)");
+                save |= ImGui.Checkbox("Match only when status is missing", ref cur.MissingStatus);
+            }
+
+            save |= ImGui.SliderFloat("Max Distance", ref cur.MaxDistance, 0.0f, 55.0f, cur.MaxDistance > 0 ? "%.0f yalms" : "Any");
+
+            save |= ImGui.Combo("Sort", ref cur.Sort, "First found\0Lowest HP %\0Highest HP %\0Nearest\0Farthest");
+            ImGuiEx.SetItemTooltip("How to pick among multiple matching candidates.");
+
+            ImGui.Separator();
+
+            var match = PronounForge.Resolve(cur);
+            if (match != null)
+            {
+                var io = DalamudApi.ObjectTable.FirstOrDefault(o => o.Address == (nint)match);
+                ImGui.TextColored(new Vector4(0.3f, 1, 0.3f, 1), $"Current match: {io?.Name.TextValue ?? "Unknown"} ({PronounHelpers.GetHPPercent((nint)match) * 100:F0}% HP)");
+            }
+            else
+            {
+                ImGui.TextColored(new Vector4(1, 0.65f, 0.3f, 1), "Current match: none");
+            }
+
+            ImGui.Separator();
+
+            if (ImGuiEx.DeleteConfirmationButton())
+            {
+                config.ForgedPronouns.Remove(cur);
+                selectedForgedPronoun = null;
+                save = true;
+            }
+        }
+        else
+        {
+            ImGui.TextWrapped("Forge your own targeting pronouns: pick a candidate pool, add filters (role, job, HP, status, distance), and choose how ties are sorted."
+                + " Forged pronouns can be used as stack item targets and as text placeholders in macros."
+                + "\n\nSelect or create a pronoun on the left to begin.");
+        }
+
+        ImGui.EndChild();
+
+        if (save)
+        {
+            config.Save();
+            PronounManager.ReloadForged();
+        }
     }
 
     private static void DrawStackHelp()

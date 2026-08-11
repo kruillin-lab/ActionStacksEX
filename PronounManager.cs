@@ -624,7 +624,7 @@ public static class PronounManager
     {
         foreach (var t in Util.Assembly.GetTypes<IGamePronoun>())
         {
-            if (t.IsInterface || t.IsAbstract) continue;
+            if (t.IsInterface || t.IsAbstract || t == typeof(ForgedPronoun)) continue;
             var pronoun = (IGamePronoun)Activator.CreateInstance(t);
             if (pronoun == null) continue;
 
@@ -638,6 +638,39 @@ public static class PronounManager
                 if (!OrderedIDs.Contains(pronoun.ID))
                     OrderedIDs.Add(pronoun.ID);
             }
+        }
+
+        ReloadForged();
+    }
+
+    /// <summary>
+    /// Rebuilds all Pronoun Forge registrations from the current config.
+    /// Call after adding, editing, or removing a forged pronoun.
+    /// </summary>
+    public static void ReloadForged()
+    {
+        foreach (var id in CustomPronouns.Where(kv => kv.Value is ForgedPronoun).Select(kv => kv.Key).ToList())
+        {
+            CustomPronouns.Remove(id);
+            OrderedIDs.Remove(id);
+        }
+
+        foreach (var key in CustomPlaceholders.Where(kv => kv.Value is ForgedPronoun).Select(kv => kv.Key).ToList())
+            CustomPlaceholders.Remove(key);
+
+        if (ActionStacksEX.Config?.ForgedPronouns is not { } defs) return;
+
+        foreach (var def in defs)
+        {
+            if (def.ID < PronounForge.MinimumForgedID) continue;
+
+            var pronoun = new ForgedPronoun(def);
+            if (!CustomPronouns.TryAdd(def.ID, pronoun)) continue;
+
+            if (!string.IsNullOrWhiteSpace(def.Placeholder))
+                CustomPlaceholders.TryAdd(def.Placeholder, pronoun);
+
+            OrderedIDs.Add(def.ID);
         }
     }
 

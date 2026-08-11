@@ -99,6 +99,8 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
     public int Version { get; set; }
 
     public List<ActionStack> ActionStacks = [];
+    public List<ForgedPronounDef> ForgedPronouns = [];
+    public uint NextForgedPronounID = 30_000;
 
     /// <summary>
     /// How long (ms) a successful stack suppresses re-evaluation of the same trigger.
@@ -172,4 +174,16 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
             TypeNameHandling = TypeNameHandling.Objects,
             SerializationBinder = serializer
         });
+
+    private const string forgedExportPrefix = "ASEXF_";
+
+    public static string ExportForgedPronoun(ForgedPronounDef def)
+        => Util.CompressString(JsonConvert.SerializeObject(def, new JsonSerializerSettings
+        {
+            NullValueHandling = NullValueHandling.Ignore,
+            DefaultValueHandling = DefaultValueHandling.Ignore
+        }), forgedExportPrefix);
+
+    public static ForgedPronounDef ImportForgedPronoun(string import)
+        => JsonConvert.DeserializeObject<ForgedPronounDef>(Util.DecompressString(import, forgedExportPrefix));
 }

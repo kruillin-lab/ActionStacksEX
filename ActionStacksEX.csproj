@@ -20,7 +20,7 @@
     <!-- Copy to devPlugins after successful build -->
     <Target Name="CopyToDevPlugins" AfterTargets="Build">
         <PropertyGroup>
-            <DevPluginsPath>$(APPDATA)\XIVLauncher\devPlugins\ActionStacksOMP\</DevPluginsPath>
+            <DevPluginsPath>$(APPDATA)\XIVLauncher\devPlugins\ActionStacksEX\</DevPluginsPath>
         </PropertyGroup>
         <MakeDir Directories="$(DevPluginsPath)" Condition="!Exists('$(DevPluginsPath)')" />
         <Copy SourceFiles="$(OutputPath)ActionStacksEX.dll" DestinationFiles="$(DevPluginsPath)ActionStacksEX.dll" />
