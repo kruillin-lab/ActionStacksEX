@@ -23,7 +23,7 @@ public static unsafe class ActionStackManager
 
     // Track when each stack was last successfully executed to prevent multi-casting
     private static readonly Dictionary<string, DateTime> lastStackExecution = new();
-    private static readonly TimeSpan stackExecutionWindow = TimeSpan.FromMilliseconds(3000); // 3 second window
+    private static TimeSpan stackExecutionWindow => TimeSpan.FromMilliseconds(ActionStacksEX.Config.StackReentrancyWindow);
 
     // Track the last executed action to prevent duplicate casts
     private static uint lastExecutedAction = 0;
@@ -373,6 +373,10 @@ public static unsafe class ActionStackManager
                     if (xl != null) XRay.AddStep(XRay.StepKind.Fail, xl, $"{XRay.ObjectName(newTarget)} missing {XRay.StatusName(item.StatusID)} (required present)");
                     continue;
                 }
+            }
+            else if (item.MissingStatus && xl != null)
+            {
+                XRay.AddStep(XRay.StepKind.Info, xl, "status check ignored — \"missing status\" is ticked but no status is selected");
             }
 
             if (useRange && Game.IsActionOutOfRange(newID, newTarget))

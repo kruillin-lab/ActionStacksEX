@@ -76,6 +76,14 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
     public int Version { get; set; }
 
     public List<ActionStack> ActionStacks = [];
+
+    /// <summary>
+    /// How long (ms) a successful stack suppresses re-evaluation of the same trigger.
+    /// This exists to stop one keypress firing several stack items, so it must stay well
+    /// below a GCD — above ~2500ms it swallows genuine repeat presses and the stack's
+    /// conditions stop being checked at all.
+    /// </summary>
+    public int StackReentrancyWindow = 600;
     public bool EnableEnhancedAutoFaceTarget = false;
     public bool EnableAutoDismount = false;
     public bool EnableGroundTargetQueuing = false;

@@ -397,6 +397,12 @@ public static class PluginUI
 
         if (ImGuiEx.BeginGroupBox("Actions", 0.5f))
         {
+            save |= ImGui.DragInt("Stack Re-entrancy Window", ref ActionStacksEX.Config.StackReentrancyWindow, 0.5f, 0, 3000, "%d ms");
+            ImGuiEx.SetItemTooltip("How long a successful stack suppresses re-evaluation of the same trigger.\n" +
+                "Stops one keypress firing several stack items, so keep it well under a GCD.\n" +
+                "Set too high (the old 3000ms default) and genuine repeat presses are swallowed:\n" +
+                "the stack is skipped entirely and its conditions - HP, status, range - never run.");
+
             save |= ImGui.Checkbox("Enable Turbo Hotbar Keybinds", ref ActionStacksEX.Config.EnableTurboHotbars);
             ImGuiEx.SetItemTooltip("Allows you to hold hotbar keybinds (no controller support).\nWARNING: Text macros may be spammed.");
 
