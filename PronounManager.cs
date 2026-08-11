@@ -181,20 +181,20 @@ public static unsafe class PronounHelpers
         
         var sm = Extensions.GetStatusManager(obj);
         if (sm == null) return false;
-        
-        // Status array is fixed at 30 slots - iterate all instead of using NumValidStatuses
-        // which may not be reliable
-        for (var i = 0; i < 30; i++)
+
+        var statusSheet = DalamudApi.DataManager.GetExcelSheet<Status>();
+        if (statusSheet == null) return false;
+
+        // Walk every slot rather than trusting NumValidStatuses, which is unreliable.
+        // Read the array's real width (upstream StatusManager is FixedSizeArray60<Status>)
+        // so this can't silently miss statuses the way a hardcoded 30 did.
+        for (var i = 0; i < sm->Status.Length; i++)
         {
             var status = sm->Status[i];
             if (status.StatusId == 0) continue;
 
-            // Check if status is a dispellable debuff (negative status that can be cleansed)
-            var statusSheet = DalamudApi.DataManager.GetExcelSheet<Status>();
-            if (statusSheet == null) continue;
-
-            var statusRow = statusSheet.GetRow(status.StatusId);
-            if (statusRow.CanDispel && statusRow.StatusCategory == 2) // Category 2 = detrimental
+            // Category 2 = detrimental, i.e. a debuff an Esuna-style action can cleanse.
+            if (statusSheet.GetRowOrDefault(status.StatusId) is { CanDispel: true, StatusCategory: 2 })
                 return true;
         }
         return false;
