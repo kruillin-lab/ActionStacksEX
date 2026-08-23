@@ -34,6 +34,15 @@ public static unsafe class ActionStackManager
     private static DateTime stackExecutionStart = DateTime.MinValue;
     private static uint lockedTriggerAction = 0; // Track which specific trigger action is locked
 
+    // State for the ParseLord5-facing IPC bridge (see ActionStacksIpc.cs). A successful
+    // TryPrepareStackAction records what it resolved so a follow-up detour can recognise
+    // the same action instead of re-resolving the stack.
+    private static uint preparedActionID = 0;
+    private static uint preparedAdjustedActionID = 0;
+    private static ulong preparedTargetObjectID = Game.InvalidObjectID;
+    private static long preparedUntil = 0;
+    private const long PreparedActionWindowMs = 750;
+
     public static Bool OnUseAction(ActionManager* actionManager, uint actionType, uint actionID, ulong targetObjectID, uint param, uint useType, int pvp, bool* isGroundTarget)
     {
         try
@@ -491,5 +500,82 @@ public static unsafe class ActionStackManager
     {
         if ((ActionStacksEX.Config.EnableBlockMiscInstantGroundTargets && actionType == 11) || useType == 2 && actionType == 1 || actionType == 15) return;
         actionManager->activateGroundTarget = 1;
+    }
+
+    private static bool MatchesStackTrigger(ActionManager* actionManager, Configuration.ActionStack stack, uint adjustedActionID, Lumina.Excel.Sheets.Action triggerAction)
+    {
+        if (stack.TriggerAction != 0)
+        {
+            var triggerToCheck = stack.UseAdjustedTrigger
+                ? actionManager->CS.GetAdjustedActionId(stack.TriggerAction)
+                : stack.TriggerAction;
+            return triggerToCheck == adjustedActionID;
+        }
+
+        return stack.Items.Any(item => item.ID != 0 && actionManager->CS.GetAdjustedActionId(item.ID) == adjustedActionID);
+    }
+
+    private static bool TryResolveStackAction(ActionManager* actionManager, uint adjustedActionID, out uint action, out ulong target, out string stackName, out uint triggerActionID)
+    {
+        action = adjustedActionID;
+        target = Game.InvalidObjectID;
+        stackName = string.Empty;
+        triggerActionID = adjustedActionID;
+
+        if (!PluginModuleManager.GetModule<Modules.ActionStacks>().IsValid ||
+            !ActionStacksEX.actionSheet.TryGetValue(adjustedActionID, out var triggerAction))
+            return false;
+
+        var modifierKeys = GetModifierKeys();
+        foreach (var stack in ActionStacksEX.Config.ActionStacks)
+        {
+            var exactMatch = (stack.ModifierKeys & 8) != 0;
+            if (exactMatch ? stack.ModifierKeys != modifierKeys : (stack.ModifierKeys & modifierKeys) != stack.ModifierKeys) continue;
+            if (!MatchesStackTrigger(actionManager, stack, adjustedActionID, triggerAction)) continue;
+
+            if (lastStackExecution.TryGetValue(stack.Name, out var lastExec) &&
+                DateTime.Now - lastExec < stackExecutionWindow)
+                return false;
+
+            if (adjustedActionID == lastExecutedAction &&
+                DateTime.Now - lastExecutionTime < TimeSpan.FromMilliseconds(100))
+                return false;
+
+            if (!CheckActionStack(actionManager, adjustedActionID, stack, 0, out action, out target))
+                return false;
+
+            stackName = stack.Name;
+            triggerActionID = adjustedActionID;
+            return true;
+        }
+
+        return false;
+    }
+
+    public static bool TryPrepareStackAction(uint actionID, ulong targetObjectID, out uint action, out ulong target, out string stackName)
+    {
+        action = actionID;
+        target = targetObjectID;
+        stackName = string.Empty;
+
+        var actionManager = Common.ActionManager;
+        var adjustedActionID = actionManager->CS.GetAdjustedActionId(actionID);
+        if (!TryResolveStackAction(actionManager, adjustedActionID, out action, out target, out stackName, out var triggerActionID))
+            return false;
+
+        preparedActionID = action;
+        preparedAdjustedActionID = actionManager->CS.GetAdjustedActionId(action);
+        preparedTargetObjectID = target;
+        preparedUntil = Environment.TickCount64 + PreparedActionWindowMs;
+
+        var now = DateTime.Now;
+        lastStackExecution[stackName] = now;
+        lastExecutedAction = triggerActionID;
+        lastExecutionTime = now;
+        currentlyExecutingStack = stackName;
+        lockedTriggerAction = triggerActionID;
+        stackExecutionStart = now;
+        DalamudApi.LogDebug($"[ActionStacksEX] IPC prepare consumed one stack attempt for '{stackName}': trigger={triggerActionID}, action={action}, target={target:X}, locked for {stackExecutionWindow.TotalMilliseconds:F0}ms.");
+        return true;
     }
 }
