@@ -11,6 +11,8 @@
         <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
         <AssemblyName>ActionStacksEX</AssemblyName>
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+        <!-- Allow cross-compiling the Windows target framework on non-Windows CI/Cloud hosts. No-op on Windows. -->
+        <EnableWindowsTargeting Condition="'$(OS)' != 'Windows_NT'">true</EnableWindowsTargeting>
     </PropertyGroup>
 
     <ItemGroup>
