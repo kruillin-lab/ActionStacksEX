@@ -139,10 +139,35 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
     public int InitialTurboHotbarInterval = 0;
     public bool EnableTurboHotbarsOutOfCombat = false;
     public bool ToggleTurboMode = false;
+
+    /// <summary>
+    /// When true and <see cref="TurboHotbarInputIds"/> is non-empty, only those hotbar
+    /// keybind IDs turbo-repeat. Off or an empty list keeps the old all-slots behavior.
+    /// IDs are the same uints TurboHotbars already keys in <c>inputIDInfos</c>
+    /// (<c>InputId.HOTBAR_*</c>).
+    /// </summary>
+    public bool EnableTurboHotbarFilter = false;
+    public List<uint> TurboHotbarInputIds = [];
     public bool EnableCameraRelativeDirectionals = false;
     public bool EnableUnassignableActions = false;
     public uint AutoFocusTargetID = 0;
     public bool EnableAutoFocusTargetOutOfCombat = false;
+
+    /// <summary>
+    /// Evaluate stack items with the 64-bit bitmask predicate engine
+    /// (<see cref="StackPredicateEngine"/>) instead of the inline branch ladder.
+    /// Semantics are proven equivalent by the test harness; the bitmask path also
+    /// enables the pacer's queue-window dispatch. False keeps the legacy inline path.
+    /// </summary>
+    public bool EnableBitmaskPredicates = false;
+
+    /// <summary>
+    /// Dispatch turbo-hotbar repeats on the hybrid hardware pacer
+    /// (<see cref="Modules.HardwarePacer"/>) aligned to the animation-lock boundary,
+    /// instead of wall-clock Stopwatch intervals. Clipped/dropped turbo inputs under
+    /// high FPS and Linux/Wine scheduling jitter disappear. False keeps Stopwatch.
+    /// </summary>
+    public bool EnableTurboPacing = false;
 
     public bool EnableDecomboMeditation = false;
     public bool EnableDecomboBunshin = false;

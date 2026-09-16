@@ -6,11 +6,51 @@ using Dalamud.Hooking;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Hypostasis.Game.Structures;
+using InputId = FFXIVClientStructs.FFXIV.Client.System.Input.InputId;
 
 namespace ActionStacksEX.Modules;
 
 public unsafe class TurboHotbars : PluginModule
 {
+    /// <summary>
+    /// Maps the uint IDs <see cref="IsInputIDPressedDetour"/> already keys on to visible
+    /// hotbar slots. Values are <see cref="InputId"/> HOTBAR_1_1..HOTBAR_10_B then
+    /// HOTBAR_EX_1..HOTBAR_EX_B (12 slots per bar, slot 10 stored as *_0).
+    /// </summary>
+    public static class HotbarInputIds
+    {
+        public const int StandardBars = 10;
+        public const int ExtraBar = StandardBars + 1;
+        public const int SlotsPerBar = 12;
+
+        public static uint FromSlot(int hotbar, int slot)
+            => (uint)((int)InputId.HOTBAR_1_1 + (hotbar - 1) * SlotsPerBar + (slot - 1));
+
+        public static bool TryGetSlot(uint id, out int hotbar, out int slot)
+        {
+            var first = (uint)InputId.HOTBAR_1_1;
+            var last = (uint)InputId.HOTBAR_EX_B;
+            if (id < first || id > last)
+            {
+                hotbar = 0;
+                slot = 0;
+                return false;
+            }
+
+            var offset = id - first;
+            hotbar = (int)(offset / SlotsPerBar) + 1;
+            slot = (int)(offset % SlotsPerBar) + 1;
+            return true;
+        }
+
+        public static string Format(uint id)
+        {
+            if (!TryGetSlot(id, out var hotbar, out var slot))
+                return $"Hotbar Input {id}";
+            return hotbar == ExtraBar ? $"Extra Hotbar Slot {slot}" : $"Hotbar {hotbar} Slot {slot}";
+        }
+    }
+
     private class TurboInfo
     {
         public Stopwatch LastPress { get; } = new();
@@ -22,13 +62,51 @@ public unsafe class TurboHotbars : PluginModule
         public bool CanToggle { get; set; } = false;
         public Stopwatch TimeHeld { get; set; } = new();
 
-        public bool IsReady => LastPress.IsRunning && LastPress.ElapsedMilliseconds >= RepeatDelay;
+        /// <summary>
+        /// QPC timestamp of the last dispatch (0 = none yet). In paced mode this — not
+        /// the wall-clock <see cref="LastPress"/> — is the interval anchor: eligibility
+        /// is recomputed from it against the live animation lock on every read, so a
+        /// stale armed slot can never gate a dispatch.
+        /// </summary>
+        public long LastPressTimestamp { get; set; } = 0;
+
+        public bool IsReady
+        {
+            get
+            {
+                if (ActionStacksEX.Config.EnableTurboPacing)
+                {
+                    if (LastPressTimestamp == 0) return false;
+                    var am = Common.ActionManager;
+                    return HardwarePacer.TurboDispatchReady(
+                        LastPressTimestamp,
+                        RepeatDelay / 1000.0,
+                        am != null ? am->animationLock : 0.0,
+                        HardwarePacer.QueryTimestamp(),
+                        out _);
+                }
+                return LastPress.IsRunning && LastPress.ElapsedMilliseconds >= RepeatDelay;
+            }
+        }
     }
 
     private static readonly Dictionary<uint, TurboInfo> inputIDInfos = new();
     private static bool isAnyTurboRunning;
 
+    /// <summary>Last hotbar input ID that reported a press while the binding check hook ran.</summary>
+    public static uint LastPressedHotbarInputId { get; private set; }
+
     public override bool ShouldEnable => ActionStacksEX.Config.EnableTurboHotbars;
+
+    public static bool IsTurboEligible(uint id)
+    {
+        var cfg = ActionStacksEX.Config;
+        if (!cfg.EnableTurboHotbarFilter)
+            return true;
+
+        var ids = cfg.TurboHotbarInputIds;
+        return ids == null || ids.Count == 0 || ids.Contains(id);
+    }
 
     protected override bool Validate() => InputData.isInputIDPressed.IsValid && InputData.isInputIDHeld.IsValid;
 
@@ -49,10 +127,16 @@ public unsafe class TurboHotbars : PluginModule
 
     private static Bool IsInputIDPressedDetour(InputData* inputData, uint id)
     {
+        var isPressed = InputData.isInputIDPressed.Original(inputData, id);
+        if (isPressed)
+            LastPressedHotbarInputId = id;
+
+        if (!IsTurboEligible(id))
+            return isPressed;
+
         if (!inputIDInfos.TryGetValue(id, out var info))
             inputIDInfos[id] = info = new TurboInfo();
 
-        var isPressed = InputData.isInputIDPressed.Original(inputData, id);
         var isHeld = inputData->IsInputIDHeld(id);
         if (ActionStacksEX.Config.ToggleTurboMode)
         {
@@ -87,6 +171,9 @@ public unsafe class TurboHotbars : PluginModule
         {
             info.RepeatDelay = isPressed && ActionStacksEX.Config.InitialTurboHotbarInterval > 0 ? ActionStacksEX.Config.InitialTurboHotbarInterval : ActionStacksEX.Config.TurboHotbarInterval;
             info.LastPress.Restart();
+            // Paced-mode dispatch anchor: the engine re-derives the slot from this raw
+            // timestamp against the live animation lock on every IsReady read.
+            info.LastPressTimestamp = HardwarePacer.QueryTimestamp();
         }
         else if (isHeld != info.LastFrameHeld || useToggle)
         {
@@ -94,11 +181,15 @@ public unsafe class TurboHotbars : PluginModule
             {
                 info.RepeatDelay = 200;
                 info.LastPress.Restart();
+                info.LastPressTimestamp = HardwarePacer.QueryTimestamp();
             }
             else
             {
                 if (!info.Toggled)
-                info.LastPress.Reset();
+                {
+                    info.LastPress.Reset();
+                    info.LastPressTimestamp = 0; // paced mode: never-pressed gates IsReady
+                }
             }
         }
 

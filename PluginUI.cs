@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using ActionStacksEX.Modules;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility;
@@ -441,6 +443,99 @@ public static class PluginUI
         return ret;
     }
 
+    private static void DrawTurboHotbarAllowlist(ref bool save)
+    {
+        var ids = ActionStacksEX.Config.TurboHotbarInputIds ??= [];
+        ImGui.BeginGroup();
+
+        if (ids.Count == 0)
+            ImGui.TextDisabled("No slots selected — turbo still applies to all hotbar keybinds.");
+        else
+            ImGui.TextUnformatted($"{ids.Count} slot(s) turbo; other held hotbar keys press once.");
+
+        var last = TurboHotbars.LastPressedHotbarInputId;
+        var lastLabel = last == 0 ? "none yet" : TurboHotbars.HotbarInputIds.Format(last);
+        ImGui.TextUnformatted($"Last pressed: {lastLabel}");
+        ImGui.SameLine();
+        var already = last != 0 && ids.Contains(last);
+        using (ImGuiEx.DisabledBlock.Begin(last == 0 || already))
+        {
+            if (ImGui.SmallButton("Add##TurboLastPressed") && last != 0 && !already)
+            {
+                ids.Add(last);
+                save = true;
+            }
+        }
+        ImGuiEx.SetItemTooltip(last == 0
+            ? "Press a hotbar keybind in-game (with turbo enabled) to capture it."
+            : already ? "Already selected." : $"Add {lastLabel}", ImGuiHoveredFlags.AllowWhenDisabled);
+        ImGui.SameLine();
+        using (ImGuiEx.DisabledBlock.Begin(ids.Count == 0))
+        {
+            if (ImGui.SmallButton("Clear##TurboAllowlist") && ids.Count > 0)
+            {
+                ids.Clear();
+                save = true;
+            }
+        }
+        ImGuiEx.SetItemTooltip("Remove every selected slot.", ImGuiHoveredFlags.AllowWhenDisabled);
+
+        var selected = new Vector4(0.25f, 0.55f, 0.25f, 1f);
+        var btnSize = new Vector2(ImGui.GetFrameHeight());
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(2, 2) * ImGuiHelpers.GlobalScale);
+
+        var childHeight = Math.Min(11 * (ImGui.GetFrameHeight() + 2 * ImGuiHelpers.GlobalScale) + ImGui.GetStyle().WindowPadding.Y * 2,
+            8 * ImGui.GetFrameHeightWithSpacing());
+        ImGui.BeginChild("TurboHotbarSlots", new Vector2(0, childHeight), true);
+
+        for (var bar = 1; bar <= TurboHotbars.HotbarInputIds.ExtraBar; bar++)
+        {
+            var rowLabel = bar == TurboHotbars.HotbarInputIds.ExtraBar ? "Ex" : bar.ToString();
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextUnformatted(rowLabel);
+            ImGui.SameLine();
+
+            for (var slot = 1; slot <= TurboHotbars.HotbarInputIds.SlotsPerBar; slot++)
+            {
+                var inputId = TurboHotbars.HotbarInputIds.FromSlot(bar, slot);
+                var on = ids.Contains(inputId);
+                if (on)
+                    ImGui.PushStyleColor(ImGuiCol.Button, selected);
+
+                if (ImGui.Button($"{slot}##turbo{bar}_{slot}", btnSize))
+                {
+                    if (on)
+                        ids.Remove(inputId);
+                    else
+                        ids.Add(inputId);
+                    save = true;
+                }
+
+                if (on)
+                    ImGui.PopStyleColor();
+
+                ImGuiEx.SetItemTooltip($"{TurboHotbars.HotbarInputIds.Format(inputId)}\nClick to {(on ? "remove from" : "add to")} the turbo list.");
+
+                if (slot < TurboHotbars.HotbarInputIds.SlotsPerBar)
+                    ImGui.SameLine();
+            }
+        }
+
+        foreach (var extraId in ids.Where(id => !TurboHotbars.HotbarInputIds.TryGetSlot(id, out _, out _)).ToList())
+        {
+            if (ImGui.SmallButton($"x {TurboHotbars.HotbarInputIds.Format(extraId)}##turboExtra{extraId}"))
+            {
+                ids.Remove(extraId);
+                save = true;
+            }
+            ImGuiEx.SetItemTooltip("Unknown hotbar input ID captured from a press. Click to remove.");
+        }
+
+        ImGui.EndChild();
+        ImGui.PopStyleVar();
+        ImGui.EndGroup();
+    }
+
     private static void DrawOtherSettings()
     {
         var save = false;
@@ -452,6 +547,9 @@ public static class PluginUI
                 "Stops one keypress firing several stack items, so keep it well under a GCD.\n" +
                 "Set too high (the old 3000ms default) and genuine repeat presses are swallowed:\n" +
                 "the stack is skipped entirely and its conditions - HP, status, range - never run.");
+
+            save |= ImGui.Checkbox("Bitmask Stack Predicates", ref ActionStacksEX.Config.EnableBitmaskPredicates);
+            ImGuiEx.SetItemTooltip("Evaluates stack item conditions (target class, HP threshold, status presence)\nwith the 64-bit bitmask predicate engine instead of the branch ladder.\nSame semantics, faster selection.");
 
             save |= ImGui.Checkbox("Enable Turbo Hotbar Keybinds", ref ActionStacksEX.Config.EnableTurboHotbars);
             ImGuiEx.SetItemTooltip("Allows you to hold hotbar keybinds (no controller support).\nWARNING: Text macros may be spammed.");
@@ -467,8 +565,22 @@ public static class PluginUI
                 ImGuiEx.Prefix(false);
                 save |= ImGui.Checkbox("Enable Out of Combat##Turbo", ref ActionStacksEX.Config.EnableTurboHotbarsOutOfCombat);
 
-                ImGuiEx.Prefix(true);
+                ImGuiEx.Prefix(false);
                 save |= ImGui.Checkbox($"Toggle Hold Mode", ref ActionStacksEX.Config.ToggleTurboMode);
+
+                ImGuiEx.Prefix(false);
+                save |= ImGui.Checkbox("Hardware-Clock Pacing", ref ActionStacksEX.Config.EnableTurboPacing);
+                ImGuiEx.SetItemTooltip("Dispatches turbo repeats on a monotonic hardware counter aligned to\nthe animation-lock boundary (hybrid sleep+spin with drift fallback) instead of\nwall-clock Stopwatch intervals. Fixes clipped/dropped repeats under high FPS\nand Linux/Wine timer jitter.");
+
+                ImGuiEx.Prefix(!ActionStacksEX.Config.EnableTurboHotbarFilter);
+                save |= ImGui.Checkbox("Limit Turbo to Specific Slots", ref ActionStacksEX.Config.EnableTurboHotbarFilter);
+                ImGuiEx.SetItemTooltip("When on and at least one slot is selected, only those hotbar keybinds turbo-repeat.\nLeave this off, or keep the list empty, to turbo every hotbar keybind (original behavior).");
+
+                if (ActionStacksEX.Config.EnableTurboHotbarFilter)
+                {
+                    ImGuiEx.Prefix(true);
+                    DrawTurboHotbarAllowlist(ref save);
+                }
             }
 
             save |= ImGui.Checkbox("Enable Instant Ground Targets", ref ActionStacksEX.Config.EnableInstantGroundTarget);
