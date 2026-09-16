@@ -62,7 +62,32 @@ public unsafe class TurboHotbars : PluginModule
         public bool CanToggle { get; set; } = false;
         public Stopwatch TimeHeld { get; set; } = new();
 
-        public bool IsReady => LastPress.IsRunning && LastPress.ElapsedMilliseconds >= RepeatDelay;
+        /// <summary>
+        /// QPC timestamp of the last dispatch (0 = none yet). In paced mode this — not
+        /// the wall-clock <see cref="LastPress"/> — is the interval anchor: eligibility
+        /// is recomputed from it against the live animation lock on every read, so a
+        /// stale armed slot can never gate a dispatch.
+        /// </summary>
+        public long LastPressTimestamp { get; set; } = 0;
+
+        public bool IsReady
+        {
+            get
+            {
+                if (ActionStacksEX.Config.EnableTurboPacing)
+                {
+                    if (LastPressTimestamp == 0) return false;
+                    var am = Common.ActionManager;
+                    return HardwarePacer.TurboDispatchReady(
+                        LastPressTimestamp,
+                        RepeatDelay / 1000.0,
+                        am != null ? am->animationLock : 0.0,
+                        HardwarePacer.QueryTimestamp(),
+                        out _);
+                }
+                return LastPress.IsRunning && LastPress.ElapsedMilliseconds >= RepeatDelay;
+            }
+        }
     }
 
     private static readonly Dictionary<uint, TurboInfo> inputIDInfos = new();
@@ -146,6 +171,9 @@ public unsafe class TurboHotbars : PluginModule
         {
             info.RepeatDelay = isPressed && ActionStacksEX.Config.InitialTurboHotbarInterval > 0 ? ActionStacksEX.Config.InitialTurboHotbarInterval : ActionStacksEX.Config.TurboHotbarInterval;
             info.LastPress.Restart();
+            // Paced-mode dispatch anchor: the engine re-derives the slot from this raw
+            // timestamp against the live animation lock on every IsReady read.
+            info.LastPressTimestamp = HardwarePacer.QueryTimestamp();
         }
         else if (isHeld != info.LastFrameHeld || useToggle)
         {
@@ -153,11 +181,15 @@ public unsafe class TurboHotbars : PluginModule
             {
                 info.RepeatDelay = 200;
                 info.LastPress.Restart();
+                info.LastPressTimestamp = HardwarePacer.QueryTimestamp();
             }
             else
             {
                 if (!info.Toggled)
-                info.LastPress.Reset();
+                {
+                    info.LastPress.Reset();
+                    info.LastPressTimestamp = 0; // paced mode: never-pressed gates IsReady
+                }
             }
         }
 

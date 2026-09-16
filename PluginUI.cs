@@ -548,6 +548,9 @@ public static class PluginUI
                 "Set too high (the old 3000ms default) and genuine repeat presses are swallowed:\n" +
                 "the stack is skipped entirely and its conditions - HP, status, range - never run.");
 
+            save |= ImGui.Checkbox("Bitmask Stack Predicates", ref ActionStacksEX.Config.EnableBitmaskPredicates);
+            ImGuiEx.SetItemTooltip("Evaluates stack item conditions (target class, HP threshold, status presence)\nwith the 64-bit bitmask predicate engine instead of the branch ladder.\nSame semantics, faster selection.");
+
             save |= ImGui.Checkbox("Enable Turbo Hotbar Keybinds", ref ActionStacksEX.Config.EnableTurboHotbars);
             ImGuiEx.SetItemTooltip("Allows you to hold hotbar keybinds (no controller support).\nWARNING: Text macros may be spammed.");
 
@@ -564,6 +567,10 @@ public static class PluginUI
 
                 ImGuiEx.Prefix(false);
                 save |= ImGui.Checkbox($"Toggle Hold Mode", ref ActionStacksEX.Config.ToggleTurboMode);
+
+                ImGuiEx.Prefix(false);
+                save |= ImGui.Checkbox("Hardware-Clock Pacing", ref ActionStacksEX.Config.EnableTurboPacing);
+                ImGuiEx.SetItemTooltip("Dispatches turbo repeats on a monotonic hardware counter aligned to\nthe animation-lock boundary (hybrid sleep+spin with drift fallback) instead of\nwall-clock Stopwatch intervals. Fixes clipped/dropped repeats under high FPS\nand Linux/Wine timer jitter.");
 
                 ImGuiEx.Prefix(!ActionStacksEX.Config.EnableTurboHotbarFilter);
                 save |= ImGui.Checkbox("Limit Turbo to Specific Slots", ref ActionStacksEX.Config.EnableTurboHotbarFilter);

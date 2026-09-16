@@ -153,6 +153,22 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
     public uint AutoFocusTargetID = 0;
     public bool EnableAutoFocusTargetOutOfCombat = false;
 
+    /// <summary>
+    /// Evaluate stack items with the 64-bit bitmask predicate engine
+    /// (<see cref="StackPredicateEngine"/>) instead of the inline branch ladder.
+    /// Semantics are proven equivalent by the test harness; the bitmask path also
+    /// enables the pacer's queue-window dispatch. False keeps the legacy inline path.
+    /// </summary>
+    public bool EnableBitmaskPredicates = false;
+
+    /// <summary>
+    /// Dispatch turbo-hotbar repeats on the hybrid hardware pacer
+    /// (<see cref="Modules.HardwarePacer"/>) aligned to the animation-lock boundary,
+    /// instead of wall-clock Stopwatch intervals. Clipped/dropped turbo inputs under
+    /// high FPS and Linux/Wine scheduling jitter disappear. False keeps Stopwatch.
+    /// </summary>
+    public bool EnableTurboPacing = false;
+
     public bool EnableDecomboMeditation = false;
     public bool EnableDecomboBunshin = false;
     public bool EnableDecomboWanderersMinuet = false;
