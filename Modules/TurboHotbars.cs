@@ -6,11 +6,51 @@ using Dalamud.Hooking;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Hypostasis.Game.Structures;
+using InputId = FFXIVClientStructs.FFXIV.Client.System.Input.InputId;
 
 namespace ActionStacksEX.Modules;
 
 public unsafe class TurboHotbars : PluginModule
 {
+    /// <summary>
+    /// Maps the uint IDs <see cref="IsInputIDPressedDetour"/> already keys on to visible
+    /// hotbar slots. Values are <see cref="InputId"/> HOTBAR_1_1..HOTBAR_10_B then
+    /// HOTBAR_EX_1..HOTBAR_EX_B (12 slots per bar, slot 10 stored as *_0).
+    /// </summary>
+    public static class HotbarInputIds
+    {
+        public const int StandardBars = 10;
+        public const int ExtraBar = StandardBars + 1;
+        public const int SlotsPerBar = 12;
+
+        public static uint FromSlot(int hotbar, int slot)
+            => (uint)((int)InputId.HOTBAR_1_1 + (hotbar - 1) * SlotsPerBar + (slot - 1));
+
+        public static bool TryGetSlot(uint id, out int hotbar, out int slot)
+        {
+            var first = (uint)InputId.HOTBAR_1_1;
+            var last = (uint)InputId.HOTBAR_EX_B;
+            if (id < first || id > last)
+            {
+                hotbar = 0;
+                slot = 0;
+                return false;
+            }
+
+            var offset = id - first;
+            hotbar = (int)(offset / SlotsPerBar) + 1;
+            slot = (int)(offset % SlotsPerBar) + 1;
+            return true;
+        }
+
+        public static string Format(uint id)
+        {
+            if (!TryGetSlot(id, out var hotbar, out var slot))
+                return $"Hotbar Input {id}";
+            return hotbar == ExtraBar ? $"Extra Hotbar Slot {slot}" : $"Hotbar {hotbar} Slot {slot}";
+        }
+    }
+
     private class TurboInfo
     {
         public Stopwatch LastPress { get; } = new();
@@ -28,7 +68,20 @@ public unsafe class TurboHotbars : PluginModule
     private static readonly Dictionary<uint, TurboInfo> inputIDInfos = new();
     private static bool isAnyTurboRunning;
 
+    /// <summary>Last hotbar input ID that reported a press while the binding check hook ran.</summary>
+    public static uint LastPressedHotbarInputId { get; private set; }
+
     public override bool ShouldEnable => ActionStacksEX.Config.EnableTurboHotbars;
+
+    public static bool IsTurboEligible(uint id)
+    {
+        var cfg = ActionStacksEX.Config;
+        if (!cfg.EnableTurboHotbarFilter)
+            return true;
+
+        var ids = cfg.TurboHotbarInputIds;
+        return ids == null || ids.Count == 0 || ids.Contains(id);
+    }
 
     protected override bool Validate() => InputData.isInputIDPressed.IsValid && InputData.isInputIDHeld.IsValid;
 
@@ -49,10 +102,16 @@ public unsafe class TurboHotbars : PluginModule
 
     private static Bool IsInputIDPressedDetour(InputData* inputData, uint id)
     {
+        var isPressed = InputData.isInputIDPressed.Original(inputData, id);
+        if (isPressed)
+            LastPressedHotbarInputId = id;
+
+        if (!IsTurboEligible(id))
+            return isPressed;
+
         if (!inputIDInfos.TryGetValue(id, out var info))
             inputIDInfos[id] = info = new TurboInfo();
 
-        var isPressed = InputData.isInputIDPressed.Original(inputData, id);
         var isHeld = inputData->IsInputIDHeld(id);
         if (ActionStacksEX.Config.ToggleTurboMode)
         {

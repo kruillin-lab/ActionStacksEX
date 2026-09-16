@@ -139,6 +139,15 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
     public int InitialTurboHotbarInterval = 0;
     public bool EnableTurboHotbarsOutOfCombat = false;
     public bool ToggleTurboMode = false;
+
+    /// <summary>
+    /// When true and <see cref="TurboHotbarInputIds"/> is non-empty, only those hotbar
+    /// keybind IDs turbo-repeat. Off or an empty list keeps the old all-slots behavior.
+    /// IDs are the same uints TurboHotbars already keys in <c>inputIDInfos</c>
+    /// (<c>InputId.HOTBAR_*</c>).
+    /// </summary>
+    public bool EnableTurboHotbarFilter = false;
+    public List<uint> TurboHotbarInputIds = [];
     public bool EnableCameraRelativeDirectionals = false;
     public bool EnableUnassignableActions = false;
     public uint AutoFocusTargetID = 0;
