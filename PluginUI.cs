@@ -524,20 +524,16 @@ public static class PluginUI
             save |= ImGui.Checkbox("Enable Extended Slidecast", ref ActionStacksEX.Config.EnableExtendedSlidecast);
             ImGuiEx.SetItemTooltip("Lets you start moving earlier during a cast without interrupting it.\n"
                 + "Stock game allows this for roughly the last 0.5s (ActionEffect / slidecast).\n"
-                + "This extends that client-side window up to 2.5s remaining.");
+                + "Use the slider to grow or shrink that safe-move window (max 2.5s remaining).");
 
             using (ImGuiEx.DisabledBlock.Begin(!ActionStacksEX.Config.EnableExtendedSlidecast))
-            using (ImGuiEx.ItemWidthBlock.Begin(ImGui.CalcItemWidth() / 2))
             {
                 ImGuiEx.Prefix(true);
-                if (ImGui.SliderFloat("Slidecast Window", ref ActionStacksEX.Config.SlidecastWindow, Modules.ExtendedSlidecast.MinWindow, Modules.ExtendedSlidecast.MaxWindow, "%.2f s"))
-                {
-                    ActionStacksEX.Config.SlidecastWindow = Math.Clamp(ActionStacksEX.Config.SlidecastWindow, Modules.ExtendedSlidecast.MinWindow, Modules.ExtendedSlidecast.MaxWindow);
-                    save = true;
-                }
+                save |= ImGui.SliderFloat("Safe-move Window", ref ActionStacksEX.Config.SlidecastWindow, Modules.ExtendedSlidecast.MinWindow, Modules.ExtendedSlidecast.MaxWindow, "%.2f s");
+                ActionStacksEX.Config.SlidecastWindow = Math.Clamp(ActionStacksEX.Config.SlidecastWindow, Modules.ExtendedSlidecast.MinWindow, Modules.ExtendedSlidecast.MaxWindow);
                 ImGuiEx.SetItemTooltip("Remaining cast time during which movement will not cancel the cast.\n"
-                    + "0.5s matches stock slidecast feel; 0 leaves only the game's ActionEffect window.\n"
-                    + "Instant casts, mounts, and already-snapshot casts are unaffected.");
+                    + "Drag right to start moving sooner (up to 2.5s left on the bar).\n"
+                    + "Drag left toward 0.5s for stock slidecast feel; 0 leaves only the game's ActionEffect window.");
             }
 
             save |= ImGui.Checkbox("Enable Auto Target", ref ActionStacksEX.Config.EnableAutoTarget);
