@@ -36,6 +36,20 @@ namespace ActionStacksEX.Modules;
 /// Swallowing that function (more than NoClippy does) already failed on Luis's
 /// Medica III logs: <c>lost-cast without ActionEffect via AM.Update</c>.
 ///
+/// OmenTools (AtmoOmen) has no movement→cancel gate either. The UseActionManager
+/// <c>Pre/PostCharacterStartCast</c> / <c>Pre/PostCharacterCompleteCast</c> hooks
+/// bookend a successful cast: start (begin cast) and complete (ActionEffect apply
+/// — <c>spellID</c>, <c>animationTargetID</c>, <c>lastUsedActionSequence</c>,
+/// <c>animationVariation</c>, <c>ballistaEntityID</c> match CS
+/// <c>ActionEffectHandler.Header</c>). <c>isPrevented</c> skips Original, which
+/// would block start or skip landing visuals, not keep IsCasting through a move.
+/// CS <c>BattleChara</c> / <c>Character</c> have no StartCast/CompleteCast members;
+/// CS documents <c>OpenCastBar</c> (UI) and <c>OnCastCancelled</c> (cleanup after
+/// move). OmenTools <c>CastCommand.Cancel()</c> is ExecuteCommand 105;
+/// <c>MemoryPatch</c> is a generic sig→bytes helper; <c>MovementInputController</c>
+/// injects walk/fly toward DesiredPosition; <c>IsMovementInputLocked</c> is an
+/// Orbwalker-style lock against input.
+///
 /// This module therefore does not hook, spoof CastInfo, or swallow cancels.
 /// Enable logs the blocked conclusion once.
 /// </remarks>
@@ -53,7 +67,10 @@ public class ExtendedSlidecast : PluginModule
             + "cancels the cast even with ResponseSpellId spoofed and OnCastCancelled swallowed. "
             + "IsCasting drops inside ActionManager.Update; no ActionEffect arrives. "
             + "NoClippy's CastInterrupt sig is the same OnCastCancelled; it always calls Original "
-            + "and only tracks anim-lock state. Stock ~0.5s slidecast is the server commit. "
+            + "and only tracks anim-lock state. OmenTools CharacterStartCast/CompleteCast are "
+            + "successful-cast bookends (CompleteCast args = ActionEffectHandler.Header); "
+            + "isPrevented would skip start or skip landing, not drop a move interrupt. "
+            + "Stock ~0.5s slidecast is the server commit. "
             + "This module does not spoof CastInfo or swallow cancels. Slider has no combat effect.");
     }
 
