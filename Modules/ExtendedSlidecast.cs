@@ -5,11 +5,13 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
+using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using Hypostasis.Game.Structures;
 using ActionManager = Hypostasis.Game.Structures.ActionManager;
 using CSActionManager = FFXIVClientStructs.FFXIV.Client.Game.ActionManager;
 using CSGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
+using CSCharacter = FFXIVClientStructs.FFXIV.Client.Game.Character.Character;
 
 namespace ActionStacksEX.Modules;
 
@@ -18,31 +20,27 @@ namespace ActionStacksEX.Modules;
 /// N seconds of a cast does not interrupt it.
 /// </summary>
 /// <remarks>
-/// Stock FFXIV locks the cast when ActionEffect arrives (~0.5s remaining;
-/// <c>CastInfo.ResponseSpellId</c>). Movement cancel is not
-/// <c>ActionManager.OnCastCancelled</c> (cleanup after the fact) and is not
-/// <c>EventHandler.CancelByPlayerMovement</c> (quest/event). Live 7.56: slider at
-/// 2.5s still interrupted, so the cancel runs on the position-write path.
+/// Stock FFXIV treats the cast as uncancelable once ActionEffect fills
+/// <c>CastInfo.ResponseSpellId</c>. That is the CS-documented slidecast lock — not
+/// <c>Interruptible</c>, not <c>OnCastCancelled</c>.
 ///
-/// CS-documented movement points (no invented offsets):
+/// Live 7.56 (Luis Cure III 01:24): module armed, <c>Interruptible=False</c> at cast
+/// start, first <c>SetPosition</c> while remaining≈1.58 / window=2.50, then swallowed
+/// <c>OnCastCancelled</c>, then BossMod <c>Casting=False</c> ~0.11s after the move.
+/// Ghost AM remaining kept ticking because we swallowed cleanup. The spell did not land.
+///
+/// This module therefore:
 /// <list type="bullet">
-/// <item><c>GameObject.SetPosition</c> — writes new coords</item>
-/// <item><c>GameObject.PositionModified</c> (VF55, BattleChara vtable) — fires when
-/// the local player's position actually changes</item>
-/// <item><c>GameObject.Update</c> (VF36, BattleChara vtable) — native char tick,
-/// before Dalamud Framework.Update</item>
-/// <item><c>CastInfo.Interruptible</c> on <c>BattleChara.CastInfo</c> /
-/// <c>GetCastInfo()</c> (VF80) — same bit uninterruptible casts use</item>
-/// <item><c>Hotbar.CancelCast</c> / <c>ExecuteCommand(105)</c> — request path
-/// AutoCastCancel already uses; swallowed while protected</item>
+/// <item>Copies the current spell into <c>ResponseSpellId</c> / <c>ResponseActionId</c>
+/// / <c>ResponseSourceSequence</c> when remaining is inside the slider — the same
+/// fields ActionEffect writes when the stock 0.5s window opens.</item>
+/// <item>Treats <c>GetCastInfo()-&gt;IsCasting</c> as the only live-cast signal.
+/// ActionManager timers after <c>IsCasting</c> is false are ghosts.</item>
+/// <item>Logs <c>ActionEffectHandler.Receive</c> for the local player (spell landed)
+/// and <c>lost-cast</c> when <c>IsCasting</c> drops without that receive.</item>
 /// </list>
-/// Dead targets stay cancellable via <c>GameObject.IsDead()</c>. Range/facing
-/// failures from <c>CanUseActionOnGameObject</c> are not treated as dead — that
-/// check would drop protection the instant you start moving.
-///
-/// Enable must not read Dalamud <c>ObjectTable.LocalPlayer</c> (plugin load is
-/// off-thread; that throws and Hypostasis invalidates the module). Local player
-/// comes from CS <c>Control.GetLocalPlayer()</c>, cached on Framework.Update.
+/// Dead targets stay cancellable via <c>GameObject.IsDead()</c>. Enable must not
+/// read Dalamud <c>ObjectTable</c> (plugin load is off-thread).
 /// </remarks>
 public unsafe class ExtendedSlidecast : PluginModule
 {
@@ -54,10 +52,10 @@ public unsafe class ExtendedSlidecast : PluginModule
     private const int CancelCastCommand = 105;
 
     /// <summary>
-    /// One-frame lead so Interruptible is cleared before remaining crosses the slider.
-    /// Not an extra user-facing window.
+    /// One-frame lead so the ResponseSpellId lock is applied before remaining
+    /// crosses the slider. Not an extra user-facing window.
     /// </summary>
-    private const float InterruptibleLead = 0.05f;
+    private const float LockLead = 0.05f;
 
     private const int LogThrottleMs = 250;
 
@@ -71,15 +69,14 @@ public unsafe class ExtendedSlidecast : PluginModule
     protected override void Enable()
     {
         // Plugin load / Hypostasis Toggle runs off the framework thread.
-        // Do not touch ObjectTable (or ClientState.LocalPlayer) here — that throws
-        // "Not on main thread!" and ToggleOrInvalidateModule kills the module
-        // before any move hooks are armed. Local player is resolved later from
-        // Control.GetLocalPlayer() / Framework.Update.
-        latchedProtected = false;
-        latchedRemaining = 0f;
+        // Do not touch ObjectTable (or ClientState.LocalPlayer) here.
         latchedActionId = 0;
         localPlayerPtr = 0;
+        wasLiveCasting = false;
+        sawActionEffect = false;
+        lockedSequence = 0;
         EnsureMoveHooks();
+        EnsureReceiveHook();
 
         BattleCharaUpdateHook?.Enable();
         PositionModifiedHook?.Enable();
@@ -88,6 +85,7 @@ public unsafe class ExtendedSlidecast : PluginModule
         CancelCastHook.Enable();
         OnCastCancelledHook.Enable();
         ExecuteCommandHook?.Enable();
+        ReceiveHook?.Enable(); // optional; missing Receive must not invalidate Enable
         ActionStackManager.PostUseAction += PostUseAction;
         DalamudApi.Framework.Update += FrameworkUpdate;
         DalamudApi.LogInfo($"[ExtendedSlidecast] enabled window={ClampedWindow:F2}s "
@@ -97,13 +95,15 @@ public unsafe class ExtendedSlidecast : PluginModule
             + $"AM.Update={UpdateHook != null} "
             + $"SetPosition={SetPositionHook != null} "
             + $"PositionModified={PositionModifiedHook != null} "
-            + $"BattleChara.Update={BattleCharaUpdateHook != null}");
+            + $"BattleChara.Update={BattleCharaUpdateHook != null} "
+            + $"ActionEffect.Receive={ReceiveHook != null}");
     }
 
     protected override void Disable()
     {
         DalamudApi.Framework.Update -= FrameworkUpdate;
         ActionStackManager.PostUseAction -= PostUseAction;
+        ReceiveHook?.Disable();
         ExecuteCommandHook?.Disable();
         OnCastCancelledHook.Disable();
         CancelCastHook.Disable();
@@ -111,8 +111,8 @@ public unsafe class ExtendedSlidecast : PluginModule
         SetPositionHook?.Disable();
         PositionModifiedHook?.Disable();
         BattleCharaUpdateHook?.Disable();
-        latchedProtected = false;
         localPlayerPtr = 0;
+        wasLiveCasting = false;
     }
 
     [HypostasisClientStructsInjection(typeof(CSActionManager.MemberFunctionPointers), Required = true, EnableHook = false)]
@@ -132,14 +132,19 @@ public unsafe class ExtendedSlidecast : PluginModule
     private static Hook<ExecuteCommandDelegate> ExecuteCommandHook;
     private delegate bool ExecuteCommandDelegate(int command, int param1, int param2, int param3, int param4);
 
+    private static Hook<ReceiveDelegate> ReceiveHook;
+    private delegate void ReceiveDelegate(uint casterEntityId, CSCharacter* casterPtr, System.Numerics.Vector3* targetPos,
+        ActionEffectHandler.Header* header, ActionEffectHandler.TargetEffects* effects, GameObjectId* targetEntityIds);
+
     private static Hook<CSGameObject.Delegates.SetPosition> SetPositionHook;
     private static Hook<BattleChara.Delegates.PositionModified> PositionModifiedHook;
     private static Hook<BattleChara.Delegates.Update> BattleCharaUpdateHook;
 
-    private static bool latchedProtected;
-    private static float latchedRemaining;
     private static uint latchedActionId;
     private static nint localPlayerPtr;
+    private static bool wasLiveCasting;
+    private static bool sawActionEffect;
+    private static uint lockedSequence;
     private static readonly Stopwatch logClock = Stopwatch.StartNew();
     private static long lastLogMs;
     private static string lastLogKey = string.Empty;
@@ -195,17 +200,52 @@ public unsafe class ExtendedSlidecast : PluginModule
         }
     }
 
+    private static void EnsureReceiveHook()
+    {
+        try
+        {
+            if (ReceiveHook == null && ActionEffectHandler.MemberFunctionPointers.Receive != null)
+            {
+                ReceiveHook = DalamudApi.GameInteropProvider.HookFromAddress<ReceiveDelegate>(
+                    (nint)ActionEffectHandler.MemberFunctionPointers.Receive, ReceiveDetour);
+                DalamudApi.SigScanner.AddHook(ReceiveHook, enable: false);
+            }
+        }
+        catch (Exception e)
+        {
+            DalamudApi.LogWarning("[ExtendedSlidecast] ActionEffect.Receive hook failed", e);
+        }
+    }
+
     private static void SetPositionDetour(CSGameObject* obj, float x, float y, float z)
     {
         if (IsLocalPlayer(obj))
-            OnLocalPlayerMoved("SetPosition");
+        {
+            ApplySlideLock("SetPosition");
+            var liveBefore = IsCastInfoCasting();
+            SetPositionHook.Original(obj, x, y, z);
+            NoteCastingEdge("SetPosition");
+            if (liveBefore)
+                LogMove("SetPosition");
+            return;
+        }
+
         SetPositionHook.Original(obj, x, y, z);
     }
 
     private static void PositionModifiedDetour(BattleChara* obj)
     {
         if (IsLocalPlayer(obj))
-            OnLocalPlayerMoved("PositionModified");
+        {
+            ApplySlideLock("PositionModified");
+            var liveBefore = IsCastInfoCasting();
+            PositionModifiedHook.Original(obj);
+            NoteCastingEdge("PositionModified");
+            if (liveBefore)
+                LogMove("PositionModified");
+            return;
+        }
+
         PositionModifiedHook.Original(obj);
     }
 
@@ -214,17 +254,21 @@ public unsafe class ExtendedSlidecast : PluginModule
         if (IsLocalPlayer(obj))
         {
             CacheLocalPlayer();
-            ApplyInterruptible("BattleChara.Update");
+            ApplySlideLock("BattleChara.Update");
+            BattleCharaUpdateHook.Original(obj);
+            NoteCastingEdge("BattleChara.Update");
+            return;
         }
+
         BattleCharaUpdateHook.Original(obj);
     }
 
     private static void UpdateDetour(CSActionManager* actionManager)
     {
-        ApplyInterruptible("pre-AM.Update");
+        ApplySlideLock("pre-AM.Update");
         UpdateHook.Original(actionManager);
-        ApplyInterruptible("post-AM.Update");
-        RefreshLatch();
+        ApplySlideLock("post-AM.Update");
+        NoteCastingEdge("AM.Update");
     }
 
     private static void FrameworkUpdate(IFramework framework)
@@ -232,8 +276,8 @@ public unsafe class ExtendedSlidecast : PluginModule
         try
         {
             CacheLocalPlayer();
-            ApplyInterruptible("Framework.Update");
-            RefreshLatch();
+            ApplySlideLock("Framework.Update");
+            NoteCastingEdge("Framework.Update");
             LogCastState();
         }
         catch (Exception e)
@@ -247,20 +291,22 @@ public unsafe class ExtendedSlidecast : PluginModule
         if (!ret)
             return;
         CacheLocalPlayer();
-        ApplyInterruptible("PostUseAction");
-        RefreshLatch();
+        sawActionEffect = false;
+        ApplySlideLock("PostUseAction");
+        NoteCastingEdge("PostUseAction");
     }
 
-    private static void OnLocalPlayerMoved(string source)
+    private static void ReceiveDetour(uint casterEntityId, CSCharacter* casterPtr, System.Numerics.Vector3* targetPos,
+        ActionEffectHandler.Header* header, ActionEffectHandler.TargetEffects* effects, GameObjectId* targetEntityIds)
     {
-        ApplyInterruptible(source);
-        RefreshLatch();
-        if (TryGetRemaining(out var remaining, out var castInfo, out var actionId))
-        {
-            LogThrottled($"move {source} action={actionId} remaining={remaining:F2} window={ClampedWindow:F2} "
-                + $"interruptible={(castInfo != null && castInfo->Interruptible)} "
-                + $"protected={IsProtectedWindow(useLatch: false)}");
-        }
+        ReceiveHook.Original(casterEntityId, casterPtr, targetPos, header, effects, targetEntityIds);
+        if (casterPtr == null || !IsLocalPlayer(casterPtr) || header == null)
+            return;
+
+        sawActionEffect = true;
+        LogAlways($"ActionEffect action={header->ActionId} spell={header->SpellId} "
+            + $"srcSeq={header->SourceSequence} casting={IsCastInfoCasting()} "
+            + $"remaining={FormatRemaining()} response={ResponseSpellId()}");
     }
 
     private static void OnCastCancelledDetour(CSActionManager* actionManager)
@@ -268,6 +314,7 @@ public unsafe class ExtendedSlidecast : PluginModule
         if (ShouldSwallowCancel("OnCastCancelled"))
             return;
         OnCastCancelledHook.Original(actionManager);
+        NoteCastingEdge("OnCastCancelled.Original");
     }
 
     private static void CancelCastDetour(Hotbar* hotbar)
@@ -275,6 +322,7 @@ public unsafe class ExtendedSlidecast : PluginModule
         if (ShouldSwallowCancel("Hotbar.CancelCast"))
             return;
         CancelCastHook.Original(hotbar);
+        NoteCastingEdge("Hotbar.CancelCast.Original");
     }
 
     private static bool ExecuteCommandDetour(int command, int param1, int param2, int param3, int param4)
@@ -286,20 +334,34 @@ public unsafe class ExtendedSlidecast : PluginModule
 
     private static bool ShouldSwallowCancel(string source)
     {
-        if (IsProtectedWindow(useLatch: true))
+        // If IsCasting is already false, the interrupt already happened. Swallowing
+        // OnCastCancelled here only preserves ghost AM timers — Luis 01:24.
+        if (!IsCastInfoCasting())
         {
-            LogThrottled($"swallowed {source} action={latchedActionId} remaining={FormatRemaining()} window={ClampedWindow:F2}");
+            LogAlways($"too-late {source} casting=False action={latchedActionId} "
+                + $"sawEffect={sawActionEffect} response={ResponseSpellId()}");
+            return false;
+        }
+
+        if (IsProtectedWindow())
+        {
+            LogThrottled($"swallowed {source} action={CurrentActionId()} remaining={FormatRemaining()} "
+                + $"window={ClampedWindow:F2} casting=True response={ResponseSpellId()}");
             return true;
         }
 
         LogThrottled($"allow-cancel {source} action={CurrentActionId()} remaining={FormatRemaining()} window={ClampedWindow:F2} "
-            + $"amType={ActionManagerType()} casting={IsCastInfoCasting()} response={ResponseSpellId()} deadTarget={IsCastTargetDead()}");
+            + $"casting=True response={ResponseSpellId()} deadTarget={IsCastTargetDead()}");
         return false;
     }
 
-    private static void ApplyInterruptible(string source)
+    /// <summary>
+    /// CS: once ResponseSpellId is set, "cast can't be cancelled — this is the start
+    /// of the slidecast window". Write those fields when remaining is inside the slider.
+    /// </summary>
+    private static void ApplySlideLock(string source)
     {
-        if (!TryGetRemaining(out var remaining, out var castInfo, out var actionId))
+        if (!TryGetLiveCast(out var remaining, out var castInfo, out var actionId))
             return;
 
         var window = ClampedWindow;
@@ -307,87 +369,120 @@ public unsafe class ExtendedSlidecast : PluginModule
             return;
         if (IsCastTargetDead())
             return;
-        if (remaining > window + InterruptibleLead)
+        if (remaining > window + LockLead)
             return;
 
-        var cleared = false;
-        if (castInfo != null && (castInfo->ResponseSpellId == 0) && castInfo->Interruptible)
-        {
-            castInfo->Interruptible = false;
-            cleared = true;
-        }
+        latchedActionId = actionId;
 
-        // BattleChara embeds CastInfo; GetCastInfo() should be the same pointer, but
-        // write both if they ever diverge so the move controller cannot miss it.
+        var locked = false;
+        if (castInfo != null)
+            locked |= LockResponse(castInfo, actionId);
+
         if (TryGetLocalBattleChara(out var bc))
         {
             var embedded = (CastInfo*)(&bc->CastInfo);
-            if (embedded != castInfo && embedded->IsCasting && embedded->ResponseSpellId == 0 && embedded->Interruptible
-                && remaining <= window + InterruptibleLead)
-            {
-                embedded->Interruptible = false;
-                cleared = true;
-            }
+            if (embedded != castInfo && embedded->IsCasting)
+                locked |= LockResponse(embedded, actionId);
         }
 
-        if (cleared)
-            LogThrottled($"cleared Interruptible via {source} action={actionId} remaining={remaining:F2} window={window:F2}");
+        if (locked)
+        {
+            lockedSequence = castInfo != null ? castInfo->SourceSequence : 0;
+            LogAlways($"locked ResponseSpellId via {source} action={actionId} remaining={remaining:F2} "
+                + $"window={window:F2} spell={ResponseSpellId()} seq={lockedSequence} casting=True");
+        }
     }
 
-    private static void RefreshLatch()
+    private static bool LockResponse(CastInfo* castInfo, uint actionId)
     {
-        if (!TryGetRemaining(out var remaining, out var castInfo, out var actionId))
+        if (castInfo == null || !castInfo->IsCasting)
+            return false;
+
+        if (castInfo->Interruptible)
+            castInfo->Interruptible = false;
+
+        if (castInfo->ResponseSpellId != 0)
+            return false;
+
+        var spellId = ResolveSpellId(castInfo, actionId);
+        castInfo->ResponseSpellId = spellId;
+        castInfo->ResponseActionType = (ActionType)castInfo->ActionType;
+        castInfo->ResponseActionId = actionId;
+        castInfo->ResponseSourceSequence = castInfo->SourceSequence;
+        return true;
+    }
+
+    private static uint ResolveSpellId(CastInfo* castInfo, uint actionId)
+    {
+        var am = CSActionManager.Instance();
+        if (am != null && am->CastSpellId != 0)
+            return am->CastSpellId;
+        if (castInfo != null && actionId != 0)
+        {
+            var fromSheet = CSActionManager.GetSpellIdForAction((ActionType)castInfo->ActionType, actionId);
+            if (fromSheet != 0)
+                return fromSheet;
+        }
+        return actionId;
+    }
+
+    private static void LogMove(string source)
+    {
+        if (!TryGetLiveCast(out var remaining, out var castInfo, out var actionId))
             return;
+        LogThrottled($"move {source} action={actionId} remaining={remaining:F2} window={ClampedWindow:F2} "
+            + $"interruptible={(castInfo != null && castInfo->Interruptible)} "
+            + $"casting=True response={ResponseSpellId()} protected={IsProtectedWindow()}");
+    }
 
-        var window = ClampedWindow;
-        var protectedNow = window > 0f
-            && remaining > 0f
-            && remaining <= window
-            && (castInfo == null || castInfo->ResponseSpellId == 0)
-            && !IsCastTargetDead();
+    private static void NoteCastingEdge(string source)
+    {
+        var live = IsCastInfoCasting();
+        if (wasLiveCasting && !live)
+        {
+            var outcome = sawActionEffect ? "ended after ActionEffect" : "lost-cast without ActionEffect";
+            LogAlways($"{outcome} via {source} action={latchedActionId} remaining={FormatRemaining()} "
+                + $"response={ResponseSpellId()} window={ClampedWindow:F2} seq={lockedSequence}");
+            sawActionEffect = false;
+            lockedSequence = 0;
+        }
+        else if (!wasLiveCasting && live)
+        {
+            sawActionEffect = false;
+        }
 
-        latchedProtected = protectedNow;
-        latchedRemaining = remaining;
-        latchedActionId = actionId;
+        wasLiveCasting = live;
+        if (live && TryGetLiveCast(out _, out _, out var actionId))
+            latchedActionId = actionId;
     }
 
     private static void LogCastState()
     {
-        if (!TryGetRemaining(out var remaining, out var castInfo, out var actionId))
+        if (!TryGetLiveCast(out var remaining, out var castInfo, out var actionId))
             return;
 
-        var window = ClampedWindow;
-        var protectedNow = IsProtectedWindow(useLatch: false);
-        var key = protectedNow ? "protected" : "casting";
-        LogThrottled($"{key} action={actionId} remaining={remaining:F2} window={window:F2} "
+        var key = IsProtectedWindow() ? "protected" : "casting";
+        LogThrottled($"{key} action={actionId} remaining={remaining:F2} window={ClampedWindow:F2} "
             + $"interruptible={(castInfo != null && castInfo->Interruptible)} "
-            + $"response={ResponseSpellId()} amType={ActionManagerType()} latched={latchedProtected}");
+            + $"casting=True response={ResponseSpellId()} sawEffect={sawActionEffect}");
     }
 
-    private static bool IsProtectedWindow(bool useLatch)
+    private static bool IsProtectedWindow()
     {
-        var window = ClampedWindow;
-        if (window <= 0f)
+        if (ClampedWindow <= 0f)
             return false;
-
         if (IsCastTargetDead())
             return false;
-
-        if (TryGetRemaining(out var remaining, out var castInfo, out _))
-        {
-            if (castInfo != null && castInfo->ResponseSpellId != 0)
-                return false;
-            return remaining > 0f && remaining <= window;
-        }
-
-        return useLatch && latchedProtected;
+        if (!TryGetLiveCast(out var remaining, out _, out _))
+            return false;
+        return remaining > 0f && remaining <= ClampedWindow;
     }
 
     /// <summary>
-    /// Prefer Character.GetCastInfo() remaining, then the embedded BattleChara.CastInfo,
-    /// then ActionManager timers.
+    /// Live remaining from <c>GetCastInfo()</c> / embedded CastInfo only while
+    /// <c>IsCasting</c> is true. ActionManager timers after the bit drops are ghosts.
     /// </summary>
-    private static bool TryGetRemaining(out float remaining, out CastInfo* castInfo, out uint actionId)
+    private static bool TryGetLiveCast(out float remaining, out CastInfo* castInfo, out uint actionId)
     {
         remaining = 0f;
         actionId = 0;
@@ -397,8 +492,7 @@ public unsafe class ExtendedSlidecast : PluginModule
         {
             remaining = castInfo->TotalCastTime - castInfo->CurrentCastTime;
             actionId = castInfo->ActionId;
-            if (remaining > 0f)
-                return true;
+            return remaining > 0f;
         }
 
         if (TryGetLocalBattleChara(out var bc) && bc->CastInfo.IsCasting && bc->CastInfo.TotalCastTime > 0f)
@@ -406,15 +500,6 @@ public unsafe class ExtendedSlidecast : PluginModule
             castInfo = (CastInfo*)(&bc->CastInfo);
             remaining = bc->CastInfo.TotalCastTime - bc->CastInfo.CurrentCastTime;
             actionId = bc->CastInfo.ActionId;
-            if (remaining > 0f)
-                return true;
-        }
-
-        var am = Common.ActionManager;
-        if (am != null && am->castActionType != 0 && am->castTime > 0f)
-        {
-            remaining = am->castTime - am->elapsedCastTime;
-            actionId = am->castActionID;
             return remaining > 0f;
         }
 
@@ -457,11 +542,6 @@ public unsafe class ExtendedSlidecast : PluginModule
         return o->IsDead();
     }
 
-    /// <summary>
-    /// CS <c>Control.GetLocalPlayer()</c> — not Dalamud ObjectTable. Safe from native
-    /// detours and from Framework.Update. Never throws: login/zoning returns null
-    /// and the move hooks stay armed.
-    /// </summary>
     private static BattleChara* ResolveLocalPlayer()
     {
         try
@@ -494,24 +574,25 @@ public unsafe class ExtendedSlidecast : PluginModule
 
     private static uint ResponseSpellId() => TryGetLocalCastInfo(out var ci) ? ci->ResponseSpellId : 0;
 
-    private static uint ActionManagerType()
-    {
-        var am = Common.ActionManager;
-        return am != null ? am->castActionType : 0;
-    }
-
     private static uint CurrentActionId()
     {
-        if (TryGetRemaining(out _, out _, out var id))
+        if (TryGetLiveCast(out _, out _, out var id))
             return id;
         return latchedActionId;
     }
 
     private static string FormatRemaining()
     {
-        if (TryGetRemaining(out var remaining, out _, out _))
+        if (TryGetLiveCast(out var remaining, out _, out _))
             return remaining.ToString("F2");
-        return latchedProtected ? $"{latchedRemaining:F2}(latch)" : "n/a";
+        return "n/a";
+    }
+
+    private static void LogAlways(string message)
+    {
+        lastLogKey = message;
+        lastLogMs = logClock.ElapsedMilliseconds;
+        DalamudApi.LogDebug($"[ExtendedSlidecast] {message}");
     }
 
     private static void LogThrottled(string message)
