@@ -16,7 +16,7 @@ PostBuild target `CopyToDevPlugins` auto-copies the DLL, `ECommons.dll`, and the
 
 | Path | What |
 |---|---|
-| `Modules/` | Feature modules (14) — the bulk of the plugin |
+| `Modules/` | Feature modules (15) — the bulk of the plugin |
 | `Hypostasis/` | Vendored framework layer (`Hypostasis/Dalamud/DalamudPlugin.cs` is the plugin base) — don't edit |
 | `ActionStacksEX.json` | Dalamud manifest |
 | `docs/` | Design notes |

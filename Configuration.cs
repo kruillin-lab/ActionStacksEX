@@ -115,6 +115,12 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
     public bool EnableInstantGroundTarget = false;
     public bool EnableBlockMiscInstantGroundTargets = false;
     public bool EnableAutoCastCancel = false;
+    public bool EnableExtendedSlidecast = false;
+    /// <summary>
+    /// Remaining cast time (seconds) during which movement will not interrupt the cast.
+    /// Stock game feel is ~0.5; clamp is 0–2.5.
+    /// </summary>
+    public float SlidecastWindow = 0.5f;
     public bool EnableAutoTarget = false;
     public bool EnableAutoChangeTarget = false;
     public bool EnableSpellAutoAttacks = false;

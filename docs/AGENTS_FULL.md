@@ -61,7 +61,7 @@ Hypostasis/
 
 ### Modules (`Modules/`)
 
-ActionStacks, AutoCastCancel, AutoDismount, AutoFocusTarget, AutoRefocusTarget, AutoTarget, CameraRelativeActions, Decombos, EnhancedAutoFaceTarget, FrameAlignment, QueueAdjustments, QueueMore, SpellAutoAttacks, TurboHotbars.
+ActionStacks, AutoCastCancel, AutoDismount, AutoFocusTarget, AutoRefocusTarget, AutoTarget, CameraRelativeActions, Decombos, EnhancedAutoFaceTarget, ExtendedSlidecast, FrameAlignment, QueueAdjustments, QueueMore, SpellAutoAttacks, TurboHotbars.
 
 ## Key Design Patterns
 
