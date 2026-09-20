@@ -115,6 +115,12 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
     public bool EnableInstantGroundTarget = false;
     public bool EnableBlockMiscInstantGroundTargets = false;
     public bool EnableAutoCastCancel = false;
+    public bool EnableExtendedSlidecast = false;
+    /// <summary>
+    /// Intended remaining-cast window (0–2.5s). Live 7.56 cannot extend past ActionEffect;
+    /// this value is config-only and has no combat effect.
+    /// </summary>
+    public float SlidecastWindow = 0.5f;
     public bool EnableAutoTarget = false;
     public bool EnableAutoChangeTarget = false;
     public bool EnableSpellAutoAttacks = false;

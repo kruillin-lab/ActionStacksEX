@@ -521,6 +521,24 @@ public static class PluginUI
             save |= ImGui.Checkbox("Enable Auto Cast Cancel", ref ActionStacksEX.Config.EnableAutoCastCancel);
             ImGuiEx.SetItemTooltip("Automatically cancels casting when the target dies.");
 
+            save |= ImGui.Checkbox("Enable Extended Slidecast", ref ActionStacksEX.Config.EnableExtendedSlidecast);
+            ImGuiEx.SetItemTooltip("Would let you start moving earlier during a cast without interrupting it.\n"
+                + "Live 7.56: this cannot extend past the stock ~0.5s ActionEffect window.\n"
+                + "See the note under the checkbox.");
+
+            ImGui.PushTextWrapPos();
+            ImGui.TextColored(new Vector4(1, 0.65f, 0.3f, 1),
+                "Cannot extend the safe-move window on live 7.56. Stock slidecast is a server ActionEffect commit (~0.5s), not a client CastInfo flag. Spoofing ResponseSpellId and swallowing OnCastCancelled were tested: Casting still drops on move and the spell does not land. The slider is kept for config compatibility and has no combat effect.");
+            ImGui.PopTextWrapPos();
+
+            using (ImGuiEx.DisabledBlock.Begin(true))
+            {
+                ImGuiEx.Prefix(true);
+                save |= ImGui.SliderFloat("Safe-move Window", ref ActionStacksEX.Config.SlidecastWindow, Modules.ExtendedSlidecast.MinWindow, Modules.ExtendedSlidecast.MaxWindow, "%.2f s");
+                ActionStacksEX.Config.SlidecastWindow = Math.Clamp(ActionStacksEX.Config.SlidecastWindow, Modules.ExtendedSlidecast.MinWindow, Modules.ExtendedSlidecast.MaxWindow);
+                ImGuiEx.SetItemTooltip("No combat effect. Live 7.56 cannot extend past ActionEffect.");
+            }
+
             save |= ImGui.Checkbox("Enable Auto Target", ref ActionStacksEX.Config.EnableAutoTarget);
             ImGuiEx.SetItemTooltip("Automatically targets the closest enemy when no target is specified for a targeted attack.");
 
