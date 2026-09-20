@@ -118,7 +118,7 @@ Signature pattern + replacement bytes. Patches: queueGroundTargets, spellAutoAtt
 
 ## Safety / Performance
 
-Signatures break on patches; null-check unsafe pointers; hooks must stay fast; `RunOnFrameworkThread()` for game mutations.
+Signatures break on patches; null-check unsafe pointers; hooks must stay fast; `RunOnFrameworkThread()` for game mutations. `IObjectTable` / `ClientState.LocalPlayer` are framework-thread-only — never read them from `PluginModule.Enable()` (Hypostasis Toggle runs off-thread and `ToggleOrInvalidateModule` kills the module).
 
 ## File Reference
 

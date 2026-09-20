@@ -4,6 +4,7 @@ using Dalamud.Hooking;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using Hypostasis.Game.Structures;
 using ActionManager = Hypostasis.Game.Structures.ActionManager;
@@ -38,6 +39,10 @@ namespace ActionStacksEX.Modules;
 /// Dead targets stay cancellable via <c>GameObject.IsDead()</c>. Range/facing
 /// failures from <c>CanUseActionOnGameObject</c> are not treated as dead — that
 /// check would drop protection the instant you start moving.
+///
+/// Enable must not read Dalamud <c>ObjectTable.LocalPlayer</c> (plugin load is
+/// off-thread; that throws and Hypostasis invalidates the module). Local player
+/// comes from CS <c>Control.GetLocalPlayer()</c>, cached on Framework.Update.
 /// </remarks>
 public unsafe class ExtendedSlidecast : PluginModule
 {
@@ -65,10 +70,15 @@ public unsafe class ExtendedSlidecast : PluginModule
 
     protected override void Enable()
     {
+        // Plugin load / Hypostasis Toggle runs off the framework thread.
+        // Do not touch ObjectTable (or ClientState.LocalPlayer) here — that throws
+        // "Not on main thread!" and ToggleOrInvalidateModule kills the module
+        // before any move hooks are armed. Local player is resolved later from
+        // Control.GetLocalPlayer() / Framework.Update.
         latchedProtected = false;
         latchedRemaining = 0f;
         latchedActionId = 0;
-        CacheLocalPlayer();
+        localPlayerPtr = 0;
         EnsureMoveHooks();
 
         BattleCharaUpdateHook?.Enable();
@@ -80,7 +90,7 @@ public unsafe class ExtendedSlidecast : PluginModule
         ExecuteCommandHook?.Enable();
         ActionStackManager.PostUseAction += PostUseAction;
         DalamudApi.Framework.Update += FrameworkUpdate;
-        DalamudApi.LogDebug($"[ExtendedSlidecast] enabled window={ClampedWindow:F2}s "
+        DalamudApi.LogInfo($"[ExtendedSlidecast] enabled window={ClampedWindow:F2}s "
             + $"OnCastCancelled={OnCastCancelledHook != null} "
             + $"CancelCast={CancelCastHook != null} "
             + $"ExecuteCommand={ExecuteCommandHook != null} "
@@ -219,10 +229,17 @@ public unsafe class ExtendedSlidecast : PluginModule
 
     private static void FrameworkUpdate(IFramework framework)
     {
-        CacheLocalPlayer();
-        ApplyInterruptible("Framework.Update");
-        RefreshLatch();
-        LogCastState();
+        try
+        {
+            CacheLocalPlayer();
+            ApplyInterruptible("Framework.Update");
+            RefreshLatch();
+            LogCastState();
+        }
+        catch (Exception e)
+        {
+            DalamudApi.LogError("[ExtendedSlidecast] Framework.Update", e);
+        }
     }
 
     private static void PostUseAction(ActionManager* actionManager, uint actionType, uint actionID, uint adjustedActionID, ulong targetObjectID, uint param, uint useType, int pvp, bool ret)
@@ -406,11 +423,9 @@ public unsafe class ExtendedSlidecast : PluginModule
 
     private static bool TryGetLocalBattleChara(out BattleChara* battleChara)
     {
-        battleChara = null;
-        var player = DalamudApi.ObjectTable.LocalPlayer;
-        if (player == null)
-            return false;
-        battleChara = (BattleChara*)player.Address;
+        battleChara = ResolveLocalPlayer();
+        if (battleChara == null && localPlayerPtr != 0)
+            battleChara = (BattleChara*)localPlayerPtr;
         return battleChara != null;
     }
 
@@ -442,10 +457,28 @@ public unsafe class ExtendedSlidecast : PluginModule
         return o->IsDead();
     }
 
+    /// <summary>
+    /// CS <c>Control.GetLocalPlayer()</c> — not Dalamud ObjectTable. Safe from native
+    /// detours and from Framework.Update. Never throws: login/zoning returns null
+    /// and the move hooks stay armed.
+    /// </summary>
+    private static BattleChara* ResolveLocalPlayer()
+    {
+        try
+        {
+            return Control.GetLocalPlayer();
+        }
+        catch (Exception e)
+        {
+            DalamudApi.LogWarning("[ExtendedSlidecast] Control.GetLocalPlayer failed", e);
+            return null;
+        }
+    }
+
     private static void CacheLocalPlayer()
     {
-        var player = DalamudApi.ObjectTable.LocalPlayer;
-        localPlayerPtr = player != null ? player.Address : 0;
+        var player = ResolveLocalPlayer();
+        localPlayerPtr = player != null ? (nint)player : 0;
     }
 
     private static bool IsLocalPlayer(void* obj)
