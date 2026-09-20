@@ -118,7 +118,7 @@ Signature pattern + replacement bytes. Patches: queueGroundTargets, spellAutoAtt
 
 ## Safety / Performance
 
-Signatures break on patches; null-check unsafe pointers; hooks must stay fast; `RunOnFrameworkThread()` for game mutations. `IObjectTable` / `ClientState.LocalPlayer` are framework-thread-only — never read them from `PluginModule.Enable()` (Hypostasis Toggle runs off-thread and `ToggleOrInvalidateModule` kills the module).
+Signatures break on patches; null-check unsafe pointers; hooks must stay fast; `RunOnFrameworkThread()` for game mutations. `IObjectTable` / `ClientState.LocalPlayer` are framework-thread-only — never read them from `PluginModule.Enable()` (Hypostasis Toggle runs off-thread and `ToggleOrInvalidateModule` kills the module). Extended Slidecast cannot extend past server ActionEffect on live 7.56 — do not spoof `CastInfo.ResponseSpellId` or swallow `OnCastCancelled` as a lock.
 
 ## File Reference
 

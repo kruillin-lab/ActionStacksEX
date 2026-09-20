@@ -117,8 +117,8 @@ public class Configuration : PluginConfiguration, IPluginConfiguration
     public bool EnableAutoCastCancel = false;
     public bool EnableExtendedSlidecast = false;
     /// <summary>
-    /// Remaining cast time (seconds) during which movement will not interrupt the cast.
-    /// Stock game feel is ~0.5; clamp is 0–2.5.
+    /// Intended remaining-cast window (0–2.5s). Live 7.56 cannot extend past ActionEffect;
+    /// this value is config-only and has no combat effect.
     /// </summary>
     public float SlidecastWindow = 0.5f;
     public bool EnableAutoTarget = false;

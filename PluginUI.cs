@@ -522,18 +522,21 @@ public static class PluginUI
             ImGuiEx.SetItemTooltip("Automatically cancels casting when the target dies.");
 
             save |= ImGui.Checkbox("Enable Extended Slidecast", ref ActionStacksEX.Config.EnableExtendedSlidecast);
-            ImGuiEx.SetItemTooltip("Lets you start moving earlier during a cast without interrupting it.\n"
-                + "Stock game allows this for roughly the last 0.5s (ActionEffect / slidecast).\n"
-                + "Use the slider to grow or shrink that safe-move window (max 2.5s remaining).");
+            ImGuiEx.SetItemTooltip("Would let you start moving earlier during a cast without interrupting it.\n"
+                + "Live 7.56: this cannot extend past the stock ~0.5s ActionEffect window.\n"
+                + "See the note under the checkbox.");
 
-            using (ImGuiEx.DisabledBlock.Begin(!ActionStacksEX.Config.EnableExtendedSlidecast))
+            ImGui.PushTextWrapPos();
+            ImGui.TextColored(new Vector4(1, 0.65f, 0.3f, 1),
+                "Cannot extend the safe-move window on live 7.56. Stock slidecast is a server ActionEffect commit (~0.5s), not a client CastInfo flag. Spoofing ResponseSpellId and swallowing OnCastCancelled were tested: Casting still drops on move and the spell does not land. The slider is kept for config compatibility and has no combat effect.");
+            ImGui.PopTextWrapPos();
+
+            using (ImGuiEx.DisabledBlock.Begin(true))
             {
                 ImGuiEx.Prefix(true);
                 save |= ImGui.SliderFloat("Safe-move Window", ref ActionStacksEX.Config.SlidecastWindow, Modules.ExtendedSlidecast.MinWindow, Modules.ExtendedSlidecast.MaxWindow, "%.2f s");
                 ActionStacksEX.Config.SlidecastWindow = Math.Clamp(ActionStacksEX.Config.SlidecastWindow, Modules.ExtendedSlidecast.MinWindow, Modules.ExtendedSlidecast.MaxWindow);
-                ImGuiEx.SetItemTooltip("Remaining cast time during which movement will not cancel the cast.\n"
-                    + "Drag right to start moving sooner (up to 2.5s left on the bar).\n"
-                    + "Drag left toward 0.5s for stock slidecast feel; 0 leaves only the game's ActionEffect window.");
+                ImGuiEx.SetItemTooltip("No combat effect. Live 7.56 cannot extend past ActionEffect.");
             }
 
             save |= ImGui.Checkbox("Enable Auto Target", ref ActionStacksEX.Config.EnableAutoTarget);
