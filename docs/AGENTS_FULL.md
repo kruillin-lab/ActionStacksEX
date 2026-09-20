@@ -118,7 +118,7 @@ Signature pattern + replacement bytes. Patches: queueGroundTargets, spellAutoAtt
 
 ## Safety / Performance
 
-Signatures break on patches; null-check unsafe pointers; hooks must stay fast; `RunOnFrameworkThread()` for game mutations. `IObjectTable` / `ClientState.LocalPlayer` are framework-thread-only — never read them from `PluginModule.Enable()` (Hypostasis Toggle runs off-thread and `ToggleOrInvalidateModule` kills the module). Extended Slidecast cannot extend past server ActionEffect on live 7.56 — do not spoof `CastInfo.ResponseSpellId` or swallow `OnCastCancelled` as a lock. OmenTools `CharacterStartCast` / `CharacterCompleteCast` are successful-cast bookends (CompleteCast = ActionEffect apply), not a movement-interrupt gate.
+Signatures break on patches; null-check unsafe pointers; hooks must stay fast; `RunOnFrameworkThread()` for game mutations. `IObjectTable` / `ClientState.LocalPlayer` are framework-thread-only — never read them from `PluginModule.Enable()` (Hypostasis Toggle runs off-thread and `ToggleOrInvalidateModule` kills the module). Extended Slidecast cannot extend past server ActionEffect on live 7.56 — do not spoof `CastInfo.ResponseSpellId` or swallow `OnCastCancelled` as a lock. OmenTools `CharacterStartCast` / `CharacterCompleteCast` are successful-cast bookends (CompleteCast = ActionEffect apply), not a movement-interrupt gate. The interrupt that gates ActionEffect is server-side from the client's outbound PositionUpdate (Sapphire `updatePositionHandler` → `ActorControl CastInterrupt 0x0F`); no client patch changes it.
 
 ## File Reference
 

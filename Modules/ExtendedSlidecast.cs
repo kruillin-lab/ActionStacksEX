@@ -50,6 +50,23 @@ namespace ActionStacksEX.Modules;
 /// injects walk/fly toward DesiredPosition; <c>IsMovementInputLocked</c> is an
 /// Orbwalker-style lock against input.
 ///
+/// <b>Why no client patch can work (protocol level).</b> The cancel that decides
+/// whether ActionEffect is ever sent is made on the <b>server</b>, from the client's
+/// own outbound PositionUpdate. Sapphire (server emulator built from the retail
+/// protocol) <c>updatePositionHandler</c>: if the position in the packet differs
+/// from the stored one and the player has a current action, the action is
+/// <c>setInterrupted(RegularInterrupt)</c>; <c>Action::interrupt()</c> then sends
+/// <c>ActorControl CastInterrupt (0x0F)</c> and <c>execute()</c> (ActionEffect)
+/// never runs. <c>ClientTrigger CastCancel = 0x69 (105)</c> is only the explicit
+/// cancel. Luis's Medica III log matches exactly: no ExecuteCommand(105), local
+/// cancel swallowed, still no ActionEffect — the server interrupted from position.
+/// Stock ~0.5s exists because the server resolves the cast before the client bar
+/// ends; the window is server offset + one-way latency, not a client compare.
+/// The local <c>CastInfo.IsCasting</c> clear is prediction/echo of that. The only
+/// client mechanism that could keep the server's cast alive is withholding or
+/// faking outbound PositionUpdate while moving — a position desync visible to
+/// other players and the server, not QoL. Rejected.
+///
 /// This module therefore does not hook, spoof CastInfo, or swallow cancels.
 /// Enable logs the blocked conclusion once.
 /// </remarks>
@@ -70,7 +87,9 @@ public class ExtendedSlidecast : PluginModule
             + "and only tracks anim-lock state. OmenTools CharacterStartCast/CompleteCast are "
             + "successful-cast bookends (CompleteCast args = ActionEffectHandler.Header); "
             + "isPrevented would skip start or skip landing, not drop a move interrupt. "
-            + "Stock ~0.5s slidecast is the server commit. "
+            + "Stock ~0.5s slidecast is the server commit. The server interrupts the cast from the "
+            + "client's own outbound PositionUpdate (Sapphire updatePositionHandler -> setInterrupted; "
+            + "ActorControl CastInterrupt 0x0F instead of ActionEffect); no client patch changes that. "
             + "This module does not spoof CastInfo or swallow cancels. Slider has no combat effect.");
     }
 
